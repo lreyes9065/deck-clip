@@ -18,6 +18,7 @@ import decky
 OUTPUT_DIR = Path("/home/deck/Videos/DeckClip")
 CLIP_RE = re.compile(r"^clip_(?P<app>\d+|downloaded)_(?P<date>\d{8})_(?P<time>\d{6})")
 SAFE_NAME_RE = re.compile(r"[^\w .()\[\]-]+", re.UNICODE)
+INIT_STREAM_RE = re.compile(r"^init-stream(?P<id>\d+)\.m4s$")
 
 
 def _steam_roots() -> list[Path]:
@@ -61,11 +62,29 @@ def _duration_from_mpd(path: Path) -> float | None:
         return None
 
 
+def _steamapps_dirs(roots: list[Path]) -> list[Path]:
+    """Return primary and configured Steam library steamapps directories."""
+    directories: list[Path] = []
+    for root in roots:
+        primary = root / "steamapps"
+        directories.append(primary)
+        try:
+            text = (primary / "libraryfolders.vdf").read_text(errors="replace")
+        except OSError:
+            continue
+        for encoded_path in re.findall(r'"path"\s+"((?:\\.|[^"\\])*)"', text):
+            # VDF escapes backslashes. Linux library paths normally contain none,
+            # but decoding them also keeps this fixture-friendly across platforms.
+            library_path = encoded_path.replace("\\\\", "\\").replace('\\"', '"')
+            directories.append(Path(library_path) / "steamapps")
+    return list(dict.fromkeys(path.resolve() for path in directories))
+
+
 def _app_names(roots: list[Path]) -> dict[str, str]:
     names: dict[str, str] = {}
     pattern = re.compile(r'"(appid|name)"\s+"([^"]*)"')
-    for root in roots:
-        for manifest in (root / "steamapps").glob("appmanifest_*.acf"):
+    for steamapps in _steamapps_dirs(roots):
+        for manifest in steamapps.glob("appmanifest_*.acf"):
             try:
                 fields = dict(pattern.findall(manifest.read_text(errors="replace")))
                 if fields.get("appid") and fields.get("name"):
@@ -73,6 +92,37 @@ def _app_names(roots: list[Path]) -> dict[str, str]:
             except OSError:
                 continue
     return names
+
+
+def _stream_files(session_dir: Path) -> list[tuple[int, list[Path]]]:
+    """Return each fragmented MP4 stream with init first and chunks numerically ordered."""
+    streams: list[tuple[int, list[Path]]] = []
+    for init in session_dir.glob("init-stream*.m4s"):
+        match = INIT_STREAM_RE.match(init.name)
+        if not match or not init.is_file():
+            continue
+        stream_id = int(match.group("id"))
+        chunk_re = re.compile(rf"^chunk-stream{stream_id}-(\d+)\.m4s$")
+        numbered_chunks = []
+        for chunk in session_dir.glob(f"chunk-stream{stream_id}-*.m4s"):
+            chunk_match = chunk_re.match(chunk.name)
+            if chunk_match and chunk.is_file():
+                numbered_chunks.append((int(chunk_match.group(1)), chunk))
+        numbered_chunks.sort(key=lambda entry: entry[0])
+        if numbered_chunks:
+            streams.append((stream_id, [init, *(path for _, path in numbered_chunks)]))
+    streams.sort(key=lambda entry: entry[0])
+    return streams
+
+
+def _join_fragments(files: list[Path], destination: Path, on_bytes) -> None:
+    """Join fMP4 fragments into a temporary stream without changing source files."""
+    with destination.open("xb") as output:
+        for source in files:
+            with source.open("rb") as input_file:
+                while block := input_file.read(1024 * 1024):
+                    output.write(block)
+                    on_bytes(len(block))
 
 
 def _discover(limit: int = 3) -> list[dict[str, Any]]:
@@ -198,7 +248,13 @@ class Plugin:
             parts = []
             for session_index, session in enumerate(sessions):
                 part = temp / f"part-{session_index:03d}.mp4"
-                await self._ffmpeg(session, part, lambda percent, base=session_index: self._set_progress(job, index, (base + percent / 100) / len(sessions) * 90))
+                await self._remux_session(
+                    session,
+                    part,
+                    lambda percent, base=session_index: self._set_progress(
+                        job, index, (base + percent / 100) / len(sessions) * 90
+                    ),
+                )
                 parts.append(part)
             if len(parts) == 1:
                 os.replace(parts[0], output)
@@ -213,21 +269,49 @@ class Plugin:
         job["clips"][index]["progress"] = min(99.0, value)
         job["progress"] = sum(entry["progress"] for entry in job["clips"]) / len(job["clips"])
 
-    async def _ffmpeg(self, source: Path, output: Path, progress):
-        duration = _duration_from_mpd(source) or 0
+    async def _remux_session(self, manifest: Path, output: Path, progress):
+        streams = _stream_files(manifest.parent)
+        if not streams or streams[0][0] != 0:
+            raise RuntimeError(f"No complete video fragment stream found beside {manifest.name}")
+
+        total_bytes = sum(path.stat().st_size for _, files in streams for path in files)
+        copied_bytes = 0
+
+        def on_bytes(count: int):
+            nonlocal copied_bytes
+            copied_bytes += count
+            if total_bytes:
+                progress(copied_bytes / total_bytes * 70.0)
+
+        assembled: list[Path] = []
+        for stream_id, files in streams:
+            stream_file = output.parent / f"{output.stem}-stream{stream_id}.mp4"
+            await asyncio.to_thread(_join_fragments, files, stream_file, on_bytes)
+            assembled.append(stream_file)
+
+        command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+        for stream_file in assembled:
+            command.extend(["-i", str(stream_file)])
+        command.extend(["-map", "0:v:0"])
+        for input_index in range(1, len(assembled)):
+            command.extend(["-map", f"{input_index}:a:0?"])
+        command.extend([
+            "-c", "copy", "-movflags", "+faststart", "-progress", "pipe:1", str(output)
+        ])
+
+        duration = _duration_from_mpd(manifest) or 0
         process = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
-            "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart",
-            "-progress", "pipe:1", str(output), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         assert process.stdout is not None
         async for raw in process.stdout:
             line = raw.decode(errors="replace").strip()
             if line.startswith("out_time_ms=") and duration:
-                progress(min(100.0, int(line.split("=", 1)[1]) / 1_000_000 / duration * 100))
+                media_percent = int(line.split("=", 1)[1]) / 1_000_000 / duration * 100
+                progress(70.0 + min(100.0, media_percent) * 0.3)
         stderr = (await process.stderr.read()).decode(errors="replace") if process.stderr else ""
         if await process.wait() != 0:
-            raise RuntimeError(stderr.strip() or f"FFmpeg could not read {source.name}")
+            raise RuntimeError(stderr.strip() or f"FFmpeg could not remux {manifest.parent.name}")
         progress(100.0)
 
     async def _run(self, command: list[str]):

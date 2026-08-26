@@ -1,10 +1,12 @@
 {
   "name": "deckclip",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Export Steam Game Recording clips from Decky Loader",
   "type": "module",
   "scripts": {
     "build": "rollup -c",
+    "package:decky": "sh scripts/package-decky.sh",
+    "release": "pnpm run typecheck && pnpm run test:backend && pnpm run build && pnpm run package:decky",
     "watch": "rollup -c -w",
     "typecheck": "tsc --noEmit",
     "test:backend": "python3 -m unittest discover -s tests -v"

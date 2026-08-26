@@ -1,5 +1,9 @@
+import asyncio
 import importlib.util
+import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -38,6 +42,65 @@ class BackendTests(unittest.TestCase):
     def test_sanitizes_requested_name(self):
         clip = {"game_name": "Game", "recorded_at": "2026-01-01T12:00:00+00:00"}
         self.assertEqual("my_clip.mp4", backend._safe_output_name("../my/clip.mp4", clip))
+
+    def test_orders_and_joins_every_stream_fragment(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder = Path(folder_name)
+            (folder / "init-stream0.m4s").write_bytes(b"init")
+            (folder / "chunk-stream0-00002.m4s").write_bytes(b"two")
+            (folder / "chunk-stream0-00001.m4s").write_bytes(b"one")
+            (folder / "init-stream1.m4s").write_bytes(b"audio-init")
+            (folder / "chunk-stream1-00001.m4s").write_bytes(b"audio-one")
+            streams = backend._stream_files(folder)
+            self.assertEqual([0, 1], [stream_id for stream_id, _ in streams])
+            destination = folder / "joined.mp4"
+            backend._join_fragments(streams[0][1], destination, lambda _count: None)
+            self.assertEqual(b"initonetwo", destination.read_bytes())
+
+    def test_reads_names_from_secondary_steam_library(self):
+        with tempfile.TemporaryDirectory() as root_name, tempfile.TemporaryDirectory() as library_name:
+            root = Path(root_name)
+            steamapps = root / "steamapps"
+            steamapps.mkdir()
+            (steamapps / "libraryfolders.vdf").write_text(
+                f'"libraryfolders" {{ "1" {{ "path" "{library_name}" }} }}'
+            )
+            secondary = Path(library_name) / "steamapps"
+            secondary.mkdir()
+            (secondary / "appmanifest_123.acf").write_text(
+                '"AppState" { "appid" "123" "name" "Example Game" }'
+            )
+            self.assertEqual("Example Game", backend._app_names([root])["123"])
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg tools not installed")
+    def test_remuxes_all_dash_fragments(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder = Path(folder_name)
+            manifest = folder / "session.mpd"
+            subprocess.run(
+                [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=7",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=7",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-seg_duration", "2", "-use_template", "1", "-use_timeline", "0",
+                    "-init_seg_name", "init-stream$RepresentationID$.m4s",
+                    "-media_seg_name", "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+                    "-adaptation_sets", "id=0,streams=v id=1,streams=a",
+                    "-f", "dash", str(manifest),
+                ],
+                check=True,
+            )
+            output = folder / "result.mp4"
+            asyncio.run(backend.Plugin()._remux_session(manifest, output, lambda _value: None))
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(output)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            duration = float(json.loads(probe.stdout)["format"]["duration"])
+            self.assertGreater(duration, 6.5)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,10 @@
+{
+  "name": "DeckClip",
+  "author": "DeckClip contributors",
+  "flags": ["debug", "_root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["video", "recording", "utility"],
+    "description": "Export recent Steam Game Recording clips as MP4 files."
+  }
+}

@@ -91,6 +91,28 @@ class BackendTests(unittest.TestCase):
             self.assertEqual("Emulated Example", names[str(app_id)])
             self.assertEqual("Emulated Example", names[str((app_id << 32) | 0x02000000)])
 
+    def test_reads_name_from_local_appinfo_cache(self):
+        app_id = 1715130
+        strings = [b"appinfo", b"common", b"name"]
+        blob = (
+            b"\x00" + struct.pack("<I", 0) +
+            b"\x00" + struct.pack("<I", 1) +
+            b"\x01" + struct.pack("<I", 2) + b"Crysis Remastered\0" +
+            b"\x08\x08"
+        )
+        entry_size = 60 + len(blob)
+        entry = struct.pack("<II", app_id, entry_size) + (b"\0" * 60) + blob
+        string_offset = 16 + len(entry) + 4
+        table = struct.pack("<I", len(strings)) + b"".join(value + b"\0" for value in strings)
+        data = (
+            backend.APPINFO_V41_MAGIC + struct.pack("<IQ", 1, string_offset) +
+            entry + struct.pack("<I", 0) + table
+        )
+        self.assertEqual(
+            "Crysis Remastered",
+            backend._appinfo_names_from_data(data, {app_id})[str(app_id)],
+        )
+
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg tools not installed")
     def test_remuxes_all_dash_fragments(self):
         with tempfile.TemporaryDirectory() as folder_name:

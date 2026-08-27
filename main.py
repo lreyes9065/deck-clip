@@ -4,6 +4,7 @@ import asyncio
 import copy
 import datetime as dt
 import json
+import mmap
 import os
 import re
 import shutil
@@ -20,6 +21,7 @@ OUTPUT_DIR = Path("/home/deck/Videos/DeckClip")
 CLIP_RE = re.compile(r"^clip_(?P<app>\d+|downloaded)_(?P<date>\d{8})_(?P<time>\d{6})")
 SAFE_NAME_RE = re.compile(r"[^\w .()\[\]-]+", re.UNICODE)
 INIT_STREAM_RE = re.compile(r"^init-stream(?P<id>\d+)\.m4s$")
+APPINFO_V41_MAGIC = b"\x29\x44\x56\x07"
 
 
 def _steam_roots() -> list[Path]:
@@ -81,7 +83,119 @@ def _steamapps_dirs(roots: list[Path]) -> list[Path]:
     return list(dict.fromkeys(path.resolve() for path in directories))
 
 
-def _app_names(roots: list[Path]) -> dict[str, str]:
+def _read_appinfo_string_table(data, offset: int) -> list[str]:
+    if offset < 16 or offset + 4 > len(data):
+        raise ValueError("Invalid appinfo.vdf string table offset")
+    count = struct.unpack_from("<I", data, offset)[0]
+    if count > 1_000_000:
+        raise ValueError("appinfo.vdf string table is too large")
+    position = offset + 4
+    strings: list[str] = []
+    for _ in range(count):
+        end = data.find(b"\0", position, min(len(data), position + 65537))
+        if end < 0:
+            raise ValueError("Invalid appinfo.vdf string")
+        strings.append(bytes(data[position:end]).decode("utf-8", errors="replace"))
+        position = end + 1
+    return strings
+
+
+def _read_appinfo_bvdf(data, position: int, end: int, strings: list[str], depth: int = 0) -> tuple[dict[str, Any], int]:
+    if depth > 32:
+        raise ValueError("appinfo.vdf nesting is too deep")
+    result: dict[str, Any] = {}
+    while position < end:
+        value_type = data[position]
+        position += 1
+        if value_type == 8:
+            return result, position
+        if position + 4 > end:
+            raise ValueError("Truncated appinfo.vdf key")
+        key_index = struct.unpack_from("<I", data, position)[0]
+        position += 4
+        if key_index >= len(strings):
+            raise ValueError("Invalid appinfo.vdf key index")
+        key = strings[key_index]
+        if value_type == 0:
+            value, position = _read_appinfo_bvdf(data, position, end, strings, depth + 1)
+        elif value_type == 1:
+            value_end = data.find(b"\0", position, end)
+            if value_end < 0 or value_end - position > 1024 * 1024:
+                raise ValueError("Invalid appinfo.vdf value")
+            value = bytes(data[position:value_end]).decode("utf-8", errors="replace")
+            position = value_end + 1
+        elif value_type in (2, 3, 4, 6):
+            if position + 4 > end:
+                raise ValueError("Truncated appinfo.vdf value")
+            value = struct.unpack_from("<I", data, position)[0]
+            position += 4
+        elif value_type in (7, 10):
+            if position + 8 > end:
+                raise ValueError("Truncated appinfo.vdf value")
+            value = struct.unpack_from("<Q", data, position)[0]
+            position += 8
+        elif value_type == 5:
+            value_end = position
+            while value_end + 1 < end and data[value_end:value_end + 2] != b"\0\0":
+                value_end += 2
+            if value_end + 1 >= end or value_end - position > 1024 * 1024:
+                raise ValueError("Invalid appinfo.vdf wide string")
+            value = bytes(data[position:value_end]).decode("utf-16-le", errors="replace")
+            position = value_end + 2
+        else:
+            raise ValueError(f"Unsupported appinfo.vdf value type {value_type}")
+        result[key] = value
+    return result, position
+
+
+def _appinfo_names_from_data(data, wanted_ids: set[int]) -> dict[str, str]:
+    if len(data) < 20 or bytes(data[:4]) != APPINFO_V41_MAGIC:
+        return {}
+    string_offset = struct.unpack_from("<Q", data, 8)[0]
+    strings = _read_appinfo_string_table(data, string_offset)
+    names: dict[str, str] = {}
+    remaining_ids = set(wanted_ids)
+    position = 16
+    while position + 4 <= string_offset and remaining_ids:
+        app_id = struct.unpack_from("<I", data, position)[0]
+        position += 4
+        if app_id == 0:
+            break
+        if position + 4 > string_offset:
+            break
+        size = struct.unpack_from("<I", data, position)[0]
+        position += 4
+        entry_start = position
+        entry_end = entry_start + size
+        if size < 60 or entry_end > string_offset:
+            break
+        if app_id in wanted_ids:
+            try:
+                raw, _ = _read_appinfo_bvdf(data, entry_start + 60, entry_end, strings)
+                appinfo = raw.get("appinfo", {})
+                common = appinfo.get("common", {}) if isinstance(appinfo, dict) else {}
+                name = common.get("name") if isinstance(common, dict) else None
+                if isinstance(name, str) and name.strip():
+                    names[str(app_id)] = name.strip()
+                    remaining_ids.discard(app_id)
+            except (ValueError, struct.error):
+                pass
+        position = entry_end
+    return names
+
+
+def _appinfo_names(path: Path, wanted_ids: set[int]) -> dict[str, str]:
+    if not wanted_ids:
+        return {}
+    try:
+        with path.open("rb") as appinfo_file:
+            with mmap.mmap(appinfo_file.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                return _appinfo_names_from_data(data, wanted_ids)
+    except (OSError, ValueError, struct.error):
+        return {}
+
+
+def _app_names(roots: list[Path], wanted_ids: set[str] | None = None) -> dict[str, str]:
     names: dict[str, str] = {}
     pattern = re.compile(r'"(appid|name)"\s+"([^"]*)"')
     for steamapps in _steamapps_dirs(roots):
@@ -99,6 +213,17 @@ def _app_names(roots: list[Path]) -> dict[str, str]:
         for shortcuts in userdata.glob("*/config/shortcuts.vdf"):
             for app_id, name in _shortcut_names(shortcuts).items():
                 names.setdefault(app_id, name)
+    numeric_ids = {
+        int(app_id) for app_id in (wanted_ids or set())
+        if app_id.isdigit() and int(app_id) <= 0xFFFFFFFF and app_id not in names
+    }
+    for root in roots:
+        cached = _appinfo_names(root / "appcache/appinfo.vdf", numeric_ids)
+        for app_id, name in cached.items():
+            names.setdefault(app_id, name)
+        numeric_ids -= {int(app_id) for app_id in cached}
+        if not numeric_ids:
+            break
     return names
 
 
@@ -204,7 +329,6 @@ def _join_fragments(files: list[Path], destination: Path, on_bytes) -> None:
 
 def _discover(limit: int | None = None) -> list[dict[str, Any]]:
     roots = _steam_roots()
-    app_names = _app_names(roots)
     found: list[tuple[float, Path]] = []
     for root in roots:
         userdata = root / "userdata"
@@ -217,6 +341,12 @@ def _discover(limit: int | None = None) -> list[dict[str, Any]]:
                         found.append((clip_dir.stat().st_mtime, clip_dir.resolve()))
                     except OSError:
                         continue
+    wanted_ids = {
+        match.group("app")
+        for _, clip_dir in found
+        if (match := CLIP_RE.match(clip_dir.name)) is not None
+    }
+    app_names = _app_names(roots, wanted_ids)
     results = []
     for modified, clip_dir in sorted(found, reverse=True):
         sessions = sorted(clip_dir.glob("video/**/session.mpd"), key=lambda p: p.stat().st_mtime)

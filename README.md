@@ -9,7 +9,7 @@ Each selected clip can be renamed before export. The UI reports overall and per-
 ## Prototype architecture
 
 - `src/index.tsx` is the Decky quick-access UI. It provides searchable game, All Clips, and Unknown views; paginates newest-first clip results; tracks selection/renames; starts a job; and polls lightweight status updates.
-- `main.py` is the Decky Python backend. It searches common native and Flatpak Steam roots, resolves names from installed-game manifests and read-only non-Steam `shortcuts.vdf` metadata, and locates every nested `session.mpd` in each clip.
+- `main.py` is the Decky Python backend. It searches common native and Flatpak Steam roots, resolves names from installed-game manifests, Steam's local `appinfo.vdf` cache, and read-only non-Steam `shortcuts.vdf` metadata, and locates every nested `session.mpd` in each clip.
 - DeckClip explicitly assembles every numbered Steam `.m4s` fragment for each video/audio stream, then FFmpeg remuxes those streams without re-encoding. This avoids FFmpeg stopping after the first three-second DASH fragment. If a clip spans multiple recording sessions, DeckClip concatenates the resulting session parts into one MP4.
 - All intermediate and final writes stay under `/home/deck/Videos/DeckClip/`. The source clip paths are never opened for writing, renamed, or removed.
 
@@ -41,7 +41,7 @@ Do not use GitHub's automatic **Source code** ZIP and do not ZIP the repository 
 pnpm run release
 ```
 
-This builds, tests, and validates `release/DeckClip-0.3.0.zip`. Its relevant layout is:
+This builds, tests, and validates `release/DeckClip-0.3.1.zip`. Its relevant layout is:
 
 ```text
 DeckClip/
@@ -55,10 +55,10 @@ DeckClip/
 
 ### Install through Decky
 
-1. Copy `release/DeckClip-0.3.0.zip` to the Deck's Downloads folder. Do not extract it.
+1. Copy `release/DeckClip-0.3.1.zip` to the Deck's Downloads folder. Do not extract it.
 2. In Gaming Mode, open the Quick Access menu (`…`) and Decky Loader.
 3. Open Decky settings and enable **Developer Mode** if needed.
-4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.3.0.zip` from Downloads.
+4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.3.1.zip` from Downloads.
 5. Wait for Decky to finish installing, then reload Decky or restart Steam if DeckClip does not immediately appear.
 
 Decky owns its installed plugin directory and makes it read-only; that is expected. Install updates by generating and selecting a newer ZIP rather than editing `/home/deck/homebrew/plugins/DeckClip/` directly.
@@ -85,6 +85,6 @@ For safe fixture testing, set `DECKCLIP_STEAM_ROOT` to a fake Steam directory be
 ## Known prototype limitations
 
 - FFmpeg must be present on the Deck; a store-ready package should bundle a known-compatible binary.
-- Game titles are resolved from `appmanifest_*.acf` across configured libraries and `shortcuts.vdf` for current non-Steam shortcuts. Deleted shortcuts and uninstalled games without remaining local metadata appear under Unknown / Unmatched as `Steam app <id>`.
+- Game titles are resolved from `appmanifest_*.acf` across configured libraries, Steam's local v41 `appinfo.vdf` cache, and `shortcuts.vdf` for current non-Steam shortcuts. Deleted shortcuts without remaining local metadata appear under Unknown / Unmatched as `Steam app <id>`.
 - Session-copy and concat assume Steam kept compatible codecs/settings across a multi-session clip. A resolution or codec change may require a future fallback re-encode.
 - Export jobs are in memory and do not survive a Decky restart.

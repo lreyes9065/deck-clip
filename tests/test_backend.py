@@ -46,6 +46,27 @@ class BackendTests(unittest.TestCase):
         clip = {"game_name": "Game", "recorded_at": "2026-01-01T12:00:00+00:00"}
         self.assertEqual("my_clip.mp4", backend._safe_output_name("../my/clip.mp4", clip))
 
+    def test_export_manager_only_lists_direct_regular_mp4_files(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder = Path(folder_name)
+            previous = backend.OUTPUT_DIR
+            backend.OUTPUT_DIR = folder
+            try:
+                (folder / "clip.mp4").write_bytes(b"video")
+                (folder / "notes.txt").write_text("not an export")
+                nested = folder / "nested"
+                nested.mkdir()
+                (nested / "hidden.mp4").write_bytes(b"video")
+                (folder / "linked.mp4").symlink_to(folder / "clip.mp4")
+                exports = backend._list_exports()
+                self.assertEqual(["clip.mp4"], [item["filename"] for item in exports])
+                with self.assertRaises(ValueError):
+                    backend._export_path("../clip.mp4")
+                with self.assertRaises(ValueError):
+                    backend._export_path("linked.mp4")
+            finally:
+                backend.OUTPUT_DIR = previous
+
     def test_orders_and_joins_every_stream_fragment(self):
         with tempfile.TemporaryDirectory() as folder_name:
             folder = Path(folder_name)

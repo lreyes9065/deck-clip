@@ -1,7 +1,7 @@
 {
   "name": "DeckClip",
   "author": "DeckClip contributors",
-  "flags": ["debug", "_root"],
+  "flags": ["debug"],
   "api_version": 1,
   "publish": {
     "tags": ["video", "recording", "utility"],

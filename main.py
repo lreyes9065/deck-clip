@@ -378,6 +378,45 @@ def _safe_output_name(requested: str | None, clip: dict[str, Any]) -> str:
     return name + ".mp4"
 
 
+def _export_path(filename: str) -> Path:
+    """Resolve one direct MP4 child of OUTPUT_DIR without accepting traversal or links."""
+    if not isinstance(filename, str) or not filename or Path(filename).name != filename:
+        raise ValueError("Invalid exported filename")
+    if not filename.lower().endswith(".mp4"):
+        raise ValueError("Only exported MP4 files can be managed")
+    candidate = OUTPUT_DIR / filename
+    try:
+        if candidate.is_symlink() or not candidate.is_file():
+            raise ValueError("Exported file no longer exists")
+        if candidate.resolve().parent != OUTPUT_DIR.resolve():
+            raise ValueError("Exported file is outside the DeckClip folder")
+    except OSError as error:
+        raise ValueError("Could not inspect exported file") from error
+    return candidate
+
+
+def _list_exports() -> list[dict[str, Any]]:
+    if not OUTPUT_DIR.is_dir():
+        return []
+    exports = []
+    try:
+        candidates = list(OUTPUT_DIR.iterdir())
+    except OSError:
+        return []
+    for candidate in candidates:
+        try:
+            path = _export_path(candidate.name)
+            stat = path.stat()
+        except (OSError, ValueError):
+            continue
+        exports.append({
+            "filename": path.name,
+            "size_bytes": stat.st_size,
+            "modified_at": dt.datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(),
+        })
+    return sorted(exports, key=lambda item: item["modified_at"], reverse=True)
+
+
 class Plugin:
     async def _main(self):
         self.jobs: dict[str, dict[str, Any]] = {}
@@ -392,6 +431,25 @@ class Plugin:
 
     async def list_clips(self) -> list[dict[str, Any]]:
         return await asyncio.to_thread(_discover)
+
+    async def list_exports(self) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(_list_exports)
+
+    async def trash_export(self, filename: str) -> dict[str, str]:
+        path = await asyncio.to_thread(_export_path, filename)
+        gio = shutil.which("gio")
+        if gio is None:
+            raise RuntimeError("The system Trash service is unavailable. Delete this file in Desktop Mode.")
+        process = await asyncio.create_subprocess_exec(
+            gio, "trash", "--", str(path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+        if process.returncode != 0:
+            detail = stderr.decode(errors="replace").strip()
+            raise RuntimeError(detail or "Could not move the export to Trash")
+        return {"filename": filename}
 
     async def start_export(self, items: list[dict[str, str]]) -> dict[str, str]:
         available = {clip["id"]: clip for clip in await self.list_clips()}

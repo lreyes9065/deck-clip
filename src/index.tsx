@@ -24,6 +24,7 @@ type ExportItem = { id: string; name?: string };
 type JobClip = { id: string; display_name: string; progress: number; state: string; output?: string; error?: string };
 type Job = { state: string; progress: number; output_dir: string; clips: JobClip[]; error?: string };
 type GameGroup = { id: string; name: string; clips: Clip[] };
+type ExportedFile = { filename: string; size_bytes: number; modified_at: string };
 
 const ALL_CLIPS = "__all__";
 const UNKNOWN_CLIPS = "__unknown__";
@@ -32,11 +33,20 @@ const PAGE_SIZE = 25;
 const listClips = callable<[], Clip[]>("list_clips");
 const startExport = callable<[items: ExportItem[]], { job_id: string }>("start_export");
 const getExportStatus = callable<[jobId: string], Job>("get_export_status");
+const listExports = callable<[], ExportedFile[]>("list_exports");
+const trashExport = callable<[filename: string], { filename: string }>("trash_export");
 
 const formatDuration = (seconds: number | null) => {
   if (seconds === null) return "duration unknown";
   const rounded = Math.round(seconds);
   return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, "0")}`;
+};
+const formatSize = (bytes: number) => {
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
 };
 
 function Content() {
@@ -47,6 +57,9 @@ function Content() {
   const [gameQuery, setGameQuery] = useState("");
   const [clipQuery, setClipQuery] = useState("");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [managingExports, setManagingExports] = useState(false);
+  const [exports, setExports] = useState<ExportedFile[]>([]);
+  const [confirmTrash, setConfirmTrash] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [message, setMessage] = useState("Looking for clips…");
@@ -60,6 +73,29 @@ function Content() {
       setMessage(found.length ? "" : "No Steam Game Recording clips found.");
     } catch (error) {
       setMessage(`Could not load clips: ${String(error)}`);
+    }
+  };
+  const refreshExports = async () => {
+    try {
+      setExports(await listExports());
+      setMessage("");
+    } catch (error) {
+      setMessage(`Could not load exports: ${String(error)}`);
+    }
+  };
+  const openExports = () => {
+    setManagingExports(true);
+    setConfirmTrash(null);
+    void refreshExports();
+  };
+  const moveToTrash = async (filename: string) => {
+    try {
+      await trashExport(filename);
+      setConfirmTrash(null);
+      await refreshExports();
+      toaster.toast({ title: "Moved to Trash", body: filename });
+    } catch (error) {
+      setMessage(`Could not move export to Trash: ${String(error)}`);
     }
   };
 
@@ -144,7 +180,35 @@ function Content() {
 
   return (
     <>
-      {activeGroup === null ? (
+      {managingExports ? (
+        <PanelSection title="Exported clips">
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => { setManagingExports(false); setConfirmTrash(null); }}>‹ Back to games</ButtonItem>
+          </PanelSectionRow>
+          {exports.map((item) => (
+            <PanelSectionRow key={item.filename}>
+              <Field
+                label={item.filename}
+                description={`${formatSize(item.size_bytes)} • ${new Date(item.modified_at).toLocaleString()}`}
+                bottomSeparator="none"
+              />
+              {confirmTrash === item.filename ? (
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <ButtonItem layout="below" onClick={() => void moveToTrash(item.filename)}>Confirm move to Trash</ButtonItem>
+                  <ButtonItem layout="below" onClick={() => setConfirmTrash(null)}>Cancel</ButtonItem>
+                </div>
+              ) : (
+                <ButtonItem layout="below" onClick={() => setConfirmTrash(item.filename)}>Move to Trash</ButtonItem>
+              )}
+            </PanelSectionRow>
+          ))}
+          {!exports.length && <PanelSectionRow><div>No exported MP4 files found.</div></PanelSectionRow>}
+          {message && <PanelSectionRow><div>{message}</div></PanelSectionRow>}
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => void refreshExports()}>Refresh exports</ButtonItem>
+          </PanelSectionRow>
+        </PanelSection>
+      ) : activeGroup === null ? (
         <PanelSection title="Choose a game">
           <PanelSectionRow>
             <TextField
@@ -177,6 +241,9 @@ function Content() {
           )}
           {!filteredGames.length && gameQuery && <PanelSectionRow><div>No matching games.</div></PanelSectionRow>}
           {message && <PanelSectionRow><div>{message}</div></PanelSectionRow>}
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={Boolean(jobId)} onClick={openExports}>Manage exported clips</ButtonItem>
+          </PanelSectionRow>
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={Boolean(jobId)} onClick={() => void refresh()}>Refresh library</ButtonItem>
           </PanelSectionRow>

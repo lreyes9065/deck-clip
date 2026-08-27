@@ -666,7 +666,9 @@ class Plugin:
             await server.wait_closed()
             raise RuntimeError("Could not start the local transfer server")
         port = int(sockets[0].getsockname()[1])
-        url = f"http://{address}:{port}/{token}/"
+        # Point the QR directly at the MP4 so iOS opens its top-level native
+        # video viewer, where Safari exposes Share and Save Video.
+        url = f"http://{address}:{port}/{token}/video"
         self.transfer = {
             "server": server,
             "token": token,
@@ -776,16 +778,15 @@ class Plugin:
                     "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
                     "<title>DeckClip transfer</title><style>"
                     "body{background:#111;color:#fff;font:17px system-ui;margin:0 auto;max-width:760px;padding:24px}"
-                    "video{background:#000;border-radius:12px;display:block;margin:18px 0;max-height:70vh;width:100%}"
                     "a{color:#7cc4ff}small{color:#bbb}</style><h1>DeckClip</h1>"
-                    f"<p>{filename}</p><video src='video' controls playsinline preload='metadata'></video>"
-                    "<p><strong>To save to Photos:</strong> open the video, tap Share, then Save Video.</p>"
+                    f"<p>{filename}</p><p><a href='video'>Open video in Safari</a></p>"
+                    "<p>Then use Safari's Share button and choose Save Video.</p>"
                     "<p><a href='download' download>Save to Files instead</a></p>"
                     "<small>This temporary link works only on the same local network.</small>"
                 ).encode("utf-8")
                 await self._send_http(writer, "200 OK", {
                     "Content-Type": "text/html; charset=utf-8",
-                    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; media-src 'self'; base-uri 'none'; form-action 'none'",
+                    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
                     "X-Frame-Options": "DENY",
                     "Content-Length": str(len(body)),
                 }, b"" if method == "HEAD" else body)

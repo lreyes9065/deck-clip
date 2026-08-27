@@ -67,6 +67,7 @@ function Content() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [names, setNames] = useState<Record<string, string>>({});
   const [activeGroup, setActiveGroup] = useState<string | null>(null);
+  const [gameFilter, setGameFilter] = useState<string | null>(null);
   const [clipQuery, setClipQuery] = useState("");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [managingExports, setManagingExports] = useState(false);
@@ -195,10 +196,14 @@ function Content() {
     [clips],
   );
   const gameOptions = useMemo(() => [
-    { data: ALL_CLIPS, label: `All Clips (${clips.length})` },
     ...games.map((game) => ({ data: game.id, label: `${game.name} (${game.clips.length})` })),
     ...(unknownClips.length ? [{ data: UNKNOWN_CLIPS, label: `Unknown / Unmatched (${unknownClips.length})` }] : []),
-  ], [clips.length, games, unknownClips.length]);
+  ], [games, unknownClips.length]);
+  const displayedGames = useMemo(() => {
+    if (gameFilter === UNKNOWN_CLIPS) return [];
+    if (gameFilter) return games.filter((game) => game.id === gameFilter);
+    return games.slice(0, 3);
+  }, [gameFilter, games]);
   const activeName = activeGroup === ALL_CLIPS
     ? "All Clips"
     : activeGroup === UNKNOWN_CLIPS
@@ -260,7 +265,7 @@ function Content() {
                 <div style={{ overflowWrap: "anywhere" }}>{transfer.url}</div>
               </PanelSectionRow>
               <PanelSectionRow>
-                <div>{transfer.downloads ? "Download completed. You can stop sharing." : "Keep DeckClip open and both devices on the same trusted Wi-Fi network."}</div>
+                <div>{transfer.downloads ? "Video opened. In Safari, tap Share, then Save Video." : "Scan to open the video in Safari. Keep both devices on the same trusted Wi-Fi network."}</div>
               </PanelSectionRow>
               <PanelSectionRow>
                 <ButtonItem layout="below" onClick={() => void endTransfer()}>Stop sharing</ButtonItem>
@@ -308,13 +313,18 @@ function Content() {
               label="Choose from all games"
               menuLabel="DeckClip games"
               rgOptions={gameOptions}
-              selectedOption={activeGroup}
+              selectedOption={gameFilter}
               strDefaultLabel="Select a game"
-              onChange={(option) => setActiveGroup(String(option.data))}
+              onChange={(option) => setGameFilter(String(option?.data ?? option))}
             />
           </PanelSectionRow>
-          <PanelSectionRow><Field label="Recently recorded" /></PanelSectionRow>
-          {games.slice(0, 3).map((game) => (
+          {gameFilter && (
+            <PanelSectionRow>
+              <ButtonItem layout="below" onClick={() => setGameFilter(null)}>✕ Clear game filter</ButtonItem>
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow><Field label={gameFilter ? "Selected game" : "Recently recorded"} /></PanelSectionRow>
+          {displayedGames.map((game) => (
             <PanelSectionRow key={game.id}>
               <ButtonItem
                 layout="below"
@@ -324,6 +334,13 @@ function Content() {
               </ButtonItem>
             </PanelSectionRow>
           ))}
+          {gameFilter === UNKNOWN_CLIPS && (
+            <PanelSectionRow>
+              <ButtonItem layout="below" onClick={() => setActiveGroup(UNKNOWN_CLIPS)}>
+                Unknown / Unmatched ({unknownClips.length})
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
           {message && <PanelSectionRow><div>{message}</div></PanelSectionRow>}
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={Boolean(jobId)} onClick={() => void refresh()}>Refresh library</ButtonItem>

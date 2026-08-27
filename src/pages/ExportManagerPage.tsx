@@ -35,7 +35,6 @@ export function ExportManagerPage(props: Props) {
             </div>
           </div>
         </PanelSectionRow>
-        <PanelSectionRow><div style={{ overflowWrap: "anywhere" }}>{props.transfer.url}</div></PanelSectionRow>
         <PanelSectionRow><div>{props.transfer.downloads ? "Download completed. You can stop sharing." : "Keep DeckClip open and both devices on the same trusted Wi-Fi network."}</div></PanelSectionRow>
         <PanelSectionRow><ButtonItem layout="below" onClick={props.onStopTransfer}>Stop sharing</ButtonItem></PanelSectionRow>
       </> : props.exports.map((item) => (

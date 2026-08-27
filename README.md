@@ -46,7 +46,7 @@ Do not use GitHub's automatic **Source code** ZIP and do not ZIP the repository 
 pnpm run release
 ```
 
-This builds, tests, and validates `release/DeckClip-0.7.0.zip`. Its relevant layout is:
+This builds, tests, and validates `release/DeckClip-0.7.1.zip`. Its relevant layout is:
 
 ```text
 DeckClip/
@@ -61,10 +61,10 @@ DeckClip/
 
 ### Install through Decky
 
-1. Copy `release/DeckClip-0.7.0.zip` to the Deck's Downloads folder. Do not extract it.
+1. Copy `release/DeckClip-0.7.1.zip` to the Deck's Downloads folder. Do not extract it.
 2. In Gaming Mode, open the Quick Access menu (`…`) and Decky Loader.
 3. Open Decky settings and enable **Developer Mode** if needed.
-4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.7.0.zip` from Downloads.
+4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.7.1.zip` from Downloads.
 5. Wait for Decky to finish installing, then reload Decky or restart Steam if DeckClip does not immediately appear.
 
 Decky owns its installed plugin directory and makes it read-only; that is expected. Install updates by generating and selecting a newer ZIP rather than editing `/home/deck/homebrew/plugins/DeckClip/` directly.

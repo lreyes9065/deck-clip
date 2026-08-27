@@ -8,12 +8,12 @@ Each selected clip can be renamed before export. The UI reports overall and per-
 
 DeckClip runs without root privileges. Its export manager lists only direct MP4 files in the dedicated output folder and provides a confirmed **Move to Trash** action; it never manages Steam's source recordings.
 
-An exported clip can also be shared directly to a phone. DeckClip starts a temporary local-only web server, displays a QR code, and stops sharing after ten minutes or when the user presses **Stop sharing**. No LocalSend plugin, cloud account, or internet upload is required.
+An exported clip can also be shared directly to a phone. DeckClip starts a temporary local-only web server, displays a QR code, and stops sharing after ten minutes or when the user presses **Stop sharing**. After a complete download it keeps a 30-second retry window, then closes automatically. No LocalSend plugin, cloud account, or internet upload is required.
 
 ## Prototype architecture
 
 - `src/index.tsx` is the small Decky entry point and screen coordinator. `src/pages/` contains the library, clip browser, and export manager screens; `src/components/` contains reusable UI; `src/hooks/` owns export and transfer polling; and typed backend calls, models, persistence, and formatting live under `src/api/`, `src/types/`, and `src/utils/`.
-- `main.py` is the Decky Python backend. It searches common native and Flatpak Steam roots, resolves names from installed-game manifests, Steam's local `appinfo.vdf` cache, and read-only non-Steam `shortcuts.vdf` metadata, and locates every nested `session.mpd` in each clip.
+- `main.py` is Decky's compatibility entry point and coordinates export jobs. Self-contained services live under `backend/`: `library.py` performs read-only Steam discovery and name resolution, `exports.py` validates output-file access, `media.py` assembles fragmented streams, `qr.py` generates transfer QR matrices, and `transfer.py` owns the temporary token-protected LAN server and its lifecycle.
 - DeckClip explicitly assembles every numbered Steam `.m4s` fragment for each video/audio stream, then FFmpeg remuxes those streams without re-encoding. This avoids FFmpeg stopping after the first three-second DASH fragment. If a clip spans multiple recording sessions, DeckClip concatenates the resulting session parts into one MP4.
 - All intermediate and final writes stay under `/home/deck/Videos/DeckClip/`. The source clip paths are never opened for writing, renamed, or removed.
 - Phone transfer serves one selected export at a time over the Deck's current LAN address. A cryptographically random URL protects the file, the server accepts only that exact URL, and it automatically expires after ten minutes.
@@ -46,10 +46,17 @@ Do not use GitHub's automatic **Source code** ZIP and do not ZIP the repository 
 pnpm run release
 ```
 
-This builds, tests, and validates `release/DeckClip-0.7.1.zip`. Its relevant layout is:
+This builds, tests, and validates `release/DeckClip-0.8.0.zip`. Its relevant layout is:
 
 ```text
 DeckClip/
+├── backend/
+│   ├── __init__.py
+│   ├── exports.py
+│   ├── library.py
+│   ├── media.py
+│   ├── qr.py
+│   └── transfer.py
 ├── dist/index.js
 ├── main.py
 ├── package.json
@@ -61,10 +68,10 @@ DeckClip/
 
 ### Install through Decky
 
-1. Copy `release/DeckClip-0.7.1.zip` to the Deck's Downloads folder. Do not extract it.
+1. Copy `release/DeckClip-0.8.0.zip` to the Deck's Downloads folder. Do not extract it.
 2. In Gaming Mode, open the Quick Access menu (`…`) and Decky Loader.
 3. Open Decky settings and enable **Developer Mode** if needed.
-4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.7.1.zip` from Downloads.
+4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.8.0.zip` from Downloads.
 5. Wait for Decky to finish installing, then reload Decky or restart Steam if DeckClip does not immediately appear.
 
 Decky owns its installed plugin directory and makes it read-only; that is expected. Install updates by generating and selecting a newer ZIP rather than editing `/home/deck/homebrew/plugins/DeckClip/` directly.

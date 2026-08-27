@@ -11,6 +11,8 @@ import types
 import unittest
 from pathlib import Path
 
+import backend.transfer as transfer_backend
+
 fake_decky = types.SimpleNamespace(DECKY_USER_HOME="/home/deck", logger=types.SimpleNamespace(info=lambda *a: None, exception=lambda *a: None))
 sys.modules.setdefault("decky", fake_decky)
 spec = importlib.util.spec_from_file_location("deckclip_backend", Path(__file__).parents[1] / "main.py")
@@ -139,6 +141,52 @@ class BackendTests(unittest.TestCase):
                 finally:
                     plugin.transfer = None
                     backend.OUTPUT_DIR = previous_output
+
+        asyncio.run(scenario())
+
+    def test_completed_full_download_closes_transfer_after_grace_period(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as folder_name:
+                folder = Path(folder_name)
+                previous_output = backend.OUTPUT_DIR
+                previous_grace = transfer_backend.TRANSFER_COMPLETION_GRACE_SECONDS
+                backend.OUTPUT_DIR = folder
+                transfer_backend.TRANSFER_COMPLETION_GRACE_SECONDS = 0.01
+                plugin = backend.Plugin()
+                await plugin._main()
+
+                class FakeServer:
+                    def close(self): pass
+                    async def wait_closed(self): pass
+
+                class MemoryWriter:
+                    def __init__(self): self.data = bytearray()
+                    def write(self, value): self.data.extend(value)
+                    async def drain(self): pass
+                    def close(self): pass
+                    async def wait_closed(self): pass
+
+                try:
+                    path = folder / "clip.mp4"
+                    path.write_bytes(b"0123456789")
+                    plugin.transfer = {
+                        "server": FakeServer(), "token": "secret", "path": path,
+                        "filename": path.name, "url": "http://127.0.0.1:1234/secret/",
+                        "expires_at": backend.time.time() + 60, "downloads": 0,
+                        "bytes_sent": 0, "state": "ready",
+                    }
+                    reader = asyncio.StreamReader()
+                    reader.feed_data(b"GET /secret/download HTTP/1.1\r\nHost: test\r\n\r\n")
+                    reader.feed_eof()
+                    writer = MemoryWriter()
+                    await plugin._handle_transfer_client(reader, writer)
+                    self.assertEqual("downloaded", plugin.transfer["state"])
+                    await asyncio.sleep(0.03)
+                    self.assertIsNone(plugin.transfer)
+                finally:
+                    await plugin.transfers._stop_transfer()
+                    backend.OUTPUT_DIR = previous_output
+                    transfer_backend.TRANSFER_COMPLETION_GRACE_SECONDS = previous_grace
 
         asyncio.run(scenario())
 

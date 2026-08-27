@@ -18,11 +18,17 @@ if [ ! -f "$project_dir/dist/index.js" ]; then
 fi
 
 plugin_dir="$staging_dir/$plugin_name"
-mkdir -p "$plugin_dir/dist" "$release_dir"
+mkdir -p "$plugin_dir/backend" "$plugin_dir/dist" "$release_dir"
 
 cp "$project_dir/package.json" "$plugin_dir/package.json"
 cp "$project_dir/plugin.json" "$plugin_dir/plugin.json"
 cp "$project_dir/main.py" "$plugin_dir/main.py"
+cp "$project_dir/backend/__init__.py" "$plugin_dir/backend/__init__.py"
+cp "$project_dir/backend/exports.py" "$plugin_dir/backend/exports.py"
+cp "$project_dir/backend/library.py" "$plugin_dir/backend/library.py"
+cp "$project_dir/backend/media.py" "$plugin_dir/backend/media.py"
+cp "$project_dir/backend/qr.py" "$plugin_dir/backend/qr.py"
+cp "$project_dir/backend/transfer.py" "$plugin_dir/backend/transfer.py"
 cp "$project_dir/README.md" "$plugin_dir/README.md"
 cp "$project_dir/LICENSE" "$plugin_dir/LICENSE"
 cp "$project_dir/THIRD_PARTY_NOTICES.md" "$plugin_dir/THIRD_PARTY_NOTICES.md"

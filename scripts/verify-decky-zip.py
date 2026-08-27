@@ -13,6 +13,12 @@ REQUIRED = {
     "DeckClip/package.json",
     "DeckClip/plugin.json",
     "DeckClip/main.py",
+    "DeckClip/backend/__init__.py",
+    "DeckClip/backend/exports.py",
+    "DeckClip/backend/library.py",
+    "DeckClip/backend/media.py",
+    "DeckClip/backend/qr.py",
+    "DeckClip/backend/transfer.py",
     "DeckClip/dist/index.js",
     "DeckClip/LICENSE",
 }

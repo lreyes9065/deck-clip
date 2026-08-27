@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import tempfile
 import uuid
 from pathlib import Path
@@ -91,6 +92,82 @@ def _app_names(roots: list[Path]) -> dict[str, str]:
                     names[fields["appid"]] = fields["name"]
             except OSError:
                 continue
+    for root in roots:
+        userdata = root / "userdata"
+        if not userdata.is_dir():
+            continue
+        for shortcuts in userdata.glob("*/config/shortcuts.vdf"):
+            for app_id, name in _shortcut_names(shortcuts).items():
+                names.setdefault(app_id, name)
+    return names
+
+
+def _read_vdf_string(data: bytes, position: int) -> tuple[str, int]:
+    end = data.find(b"\0", position)
+    if end < 0 or end - position > 65536:
+        raise ValueError("Invalid shortcuts.vdf string")
+    return data[position:end].decode("utf-8", errors="replace"), end + 1
+
+
+def _read_vdf_object(data: bytes, position: int, depth: int = 0) -> tuple[dict[str, Any], int]:
+    if depth > 16:
+        raise ValueError("shortcuts.vdf nesting is too deep")
+    result: dict[str, Any] = {}
+    while position < len(data):
+        value_type = data[position]
+        position += 1
+        if value_type == 8:
+            return result, position
+        key, position = _read_vdf_string(data, position)
+        key = key.lower()
+        if value_type == 0:
+            value, position = _read_vdf_object(data, position, depth + 1)
+        elif value_type == 1:
+            value, position = _read_vdf_string(data, position)
+        elif value_type == 2:
+            if position + 4 > len(data):
+                raise ValueError("Truncated shortcuts.vdf integer")
+            value = struct.unpack_from("<i", data, position)[0]
+            position += 4
+        elif value_type == 7:
+            if position + 8 > len(data):
+                raise ValueError("Truncated shortcuts.vdf integer")
+            value = struct.unpack_from("<Q", data, position)[0]
+            position += 8
+        else:
+            raise ValueError(f"Unsupported shortcuts.vdf value type {value_type}")
+        result[key] = value
+    raise ValueError("Unterminated shortcuts.vdf object")
+
+
+def _shortcut_names(path: Path) -> dict[str, str]:
+    """Read non-Steam shortcut IDs and names without changing Steam metadata."""
+    try:
+        if path.stat().st_size > 16 * 1024 * 1024:
+            return {}
+        data = path.read_bytes()
+        if not data or data[0] != 0:
+            return {}
+        root_key, position = _read_vdf_string(data, 1)
+        root_value, _ = _read_vdf_object(data, position, 1)
+        root = {root_key.lower(): root_value}
+    except (OSError, ValueError, struct.error):
+        return {}
+    shortcuts = root.get("shortcuts")
+    if not isinstance(shortcuts, dict):
+        return {}
+    names: dict[str, str] = {}
+    for shortcut in shortcuts.values():
+        if not isinstance(shortcut, dict):
+            continue
+        app_id = shortcut.get("appid")
+        name = shortcut.get("appname")
+        if not isinstance(app_id, int) or not isinstance(name, str) or not name.strip():
+            continue
+        unsigned_id = app_id & 0xFFFFFFFF
+        clean_name = name.strip()
+        names[str(unsigned_id)] = clean_name
+        names[str((unsigned_id << 32) | 0x02000000)] = clean_name
     return names
 
 
@@ -125,7 +202,7 @@ def _join_fragments(files: list[Path], destination: Path, on_bytes) -> None:
                     on_bytes(len(block))
 
 
-def _discover(limit: int = 3) -> list[dict[str, Any]]:
+def _discover(limit: int | None = None) -> list[dict[str, Any]]:
     roots = _steam_roots()
     app_names = _app_names(roots)
     found: list[tuple[float, Path]] = []
@@ -158,7 +235,7 @@ def _discover(limit: int = 3) -> list[dict[str, Any]]:
             "duration_seconds": total,
             "session_count": len(sessions),
         })
-        if len(results) == limit:
+        if limit is not None and len(results) == limit:
             break
     return results
 
@@ -184,7 +261,7 @@ class Plugin:
             await asyncio.gather(*self.tasks, return_exceptions=True)
 
     async def list_clips(self) -> list[dict[str, Any]]:
-        return await asyncio.to_thread(_discover, 3)
+        return await asyncio.to_thread(_discover)
 
     async def start_export(self, items: list[dict[str, str]]) -> dict[str, str]:
         available = {clip["id"]: clip for clip in await self.list_clips()}

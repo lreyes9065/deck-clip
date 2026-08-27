@@ -23,6 +23,11 @@ type Clip = {
 type ExportItem = { id: string; name?: string };
 type JobClip = { id: string; display_name: string; progress: number; state: string; output?: string; error?: string };
 type Job = { state: string; progress: number; output_dir: string; clips: JobClip[]; error?: string };
+type GameGroup = { id: string; name: string; clips: Clip[] };
+
+const ALL_CLIPS = "__all__";
+const UNKNOWN_CLIPS = "__unknown__";
+const PAGE_SIZE = 25;
 
 const listClips = callable<[], Clip[]>("list_clips");
 const startExport = callable<[items: ExportItem[]], { job_id: string }>("start_export");
@@ -38,15 +43,20 @@ function Content() {
   const [clips, setClips] = useState<Clip[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [names, setNames] = useState<Record<string, string>>({});
+  const [activeGroup, setActiveGroup] = useState<string | null>(null);
+  const [gameQuery, setGameQuery] = useState("");
+  const [clipQuery, setClipQuery] = useState("");
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [job, setJob] = useState<Job | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
-  const [message, setMessage] = useState("Looking for recent clips…");
+  const [message, setMessage] = useState("Looking for clips…");
 
   const refresh = async () => {
     try {
       const found = await listClips();
       setClips(found);
-      setSelected(Object.fromEntries(found.map((clip) => [clip.id, true])));
+      setSelected({});
+      setNames({});
       setMessage(found.length ? "" : "No Steam Game Recording clips found.");
     } catch (error) {
       setMessage(`Could not load clips: ${String(error)}`);
@@ -54,6 +64,10 @@ function Content() {
   };
 
   useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    setClipQuery("");
+    setVisibleCount(PAGE_SIZE);
+  }, [activeGroup]);
   useEffect(() => {
     if (!jobId) return;
     const timer = window.setInterval(async () => {
@@ -78,6 +92,44 @@ function Content() {
   }, [jobId]);
 
   const chosen = useMemo(() => clips.filter((clip) => selected[clip.id]), [clips, selected]);
+  const games = useMemo<GameGroup[]>(() => {
+    const grouped = new Map<string, GameGroup>();
+    for (const clip of clips) {
+      if (clip.game_name.startsWith("Steam app ") || clip.game_name === "Steam clip") continue;
+      const key = clip.app_id;
+      const group = grouped.get(key);
+      if (group) group.clips.push(clip);
+      else grouped.set(key, { id: key, name: clip.game_name, clips: [clip] });
+    }
+    return Array.from(grouped.values());
+  }, [clips]);
+  const unknownClips = useMemo(
+    () => clips.filter((clip) => clip.game_name.startsWith("Steam app ") || clip.game_name === "Steam clip"),
+    [clips],
+  );
+  const filteredGames = useMemo(() => {
+    const query = gameQuery.trim().toLocaleLowerCase();
+    if (!query) return games;
+    return games.filter((game) => game.name.toLocaleLowerCase().includes(query) || game.id.includes(query));
+  }, [games, gameQuery]);
+  const activeName = activeGroup === ALL_CLIPS
+    ? "All Clips"
+    : activeGroup === UNKNOWN_CLIPS
+      ? "Unknown / Unmatched"
+      : games.find((game) => game.id === activeGroup)?.name ?? "Clips";
+  const activeClips = useMemo(() => {
+    const source = activeGroup === ALL_CLIPS
+      ? clips
+      : activeGroup === UNKNOWN_CLIPS
+        ? unknownClips
+        : games.find((game) => game.id === activeGroup)?.clips ?? [];
+    const query = clipQuery.trim().toLocaleLowerCase();
+    if (!query) return source;
+    return source.filter((clip) => {
+      const searchable = `${clip.game_name} ${new Date(clip.recorded_at).toLocaleString()} ${formatDuration(clip.duration_seconds)}`;
+      return searchable.toLocaleLowerCase().includes(query);
+    });
+  }, [activeGroup, clipQuery, clips, games, unknownClips]);
   const exportNow = async () => {
     if (!chosen.length) return;
     setJob(null);
@@ -92,35 +144,95 @@ function Content() {
 
   return (
     <>
-      <PanelSection title="Recent clips">
-        {clips.map((clip) => (
-          <PanelSectionRow key={clip.id}>
-            <Field
-              label={clip.game_name}
-              description={`${new Date(clip.recorded_at).toLocaleString()} • ${formatDuration(clip.duration_seconds)}`}
-              bottomSeparator="none"
-            >
-              <Toggle value={Boolean(selected[clip.id])} onChange={(value) => setSelected({ ...selected, [clip.id]: value })} />
-            </Field>
-            {selected[clip.id] && (
-              <TextField
-                label="Optional filename"
-                value={names[clip.id] ?? ""}
-                onChange={(event) => setNames({ ...names, [clip.id]: event.target.value })}
-              />
-            )}
+      {activeGroup === null ? (
+        <PanelSection title="Choose a game">
+          <PanelSectionRow>
+            <TextField
+              label="Search games or App IDs"
+              value={gameQuery}
+              onChange={(event) => setGameQuery(event.target.value)}
+            />
           </PanelSectionRow>
-        ))}
-        {message && <PanelSectionRow><div>{message}</div></PanelSectionRow>}
-        <PanelSectionRow>
-          <ButtonItem layout="below" disabled={!chosen.length || Boolean(jobId)} onClick={() => void exportNow()}>
-            {jobId ? "Exporting…" : `Export ${chosen.length || "selected"} clip${chosen.length === 1 ? "" : "s"}`}
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" disabled={Boolean(jobId)} onClick={() => void refresh()}>Refresh clips</ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => setActiveGroup(ALL_CLIPS)}>
+              All Clips ({clips.length})
+            </ButtonItem>
+          </PanelSectionRow>
+          {filteredGames.map((game) => (
+            <PanelSectionRow key={game.id}>
+              <ButtonItem
+                layout="below"
+                onClick={() => setActiveGroup(game.id)}
+              >
+                {game.name} ({game.clips.length})
+              </ButtonItem>
+            </PanelSectionRow>
+          ))}
+          {unknownClips.length > 0 && (
+            <PanelSectionRow>
+              <ButtonItem layout="below" onClick={() => setActiveGroup(UNKNOWN_CLIPS)}>
+                Unknown / Unmatched ({unknownClips.length})
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
+          {!filteredGames.length && gameQuery && <PanelSectionRow><div>No matching games.</div></PanelSectionRow>}
+          {message && <PanelSectionRow><div>{message}</div></PanelSectionRow>}
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={Boolean(jobId)} onClick={() => void refresh()}>Refresh library</ButtonItem>
+          </PanelSectionRow>
+        </PanelSection>
+      ) : (
+        <PanelSection title={activeName}>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => setActiveGroup(null)}>‹ Back to games</ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <TextField
+              label="Filter by game, date, time, or duration"
+              value={clipQuery}
+              onChange={(event) => { setClipQuery(event.target.value); setVisibleCount(PAGE_SIZE); }}
+            />
+          </PanelSectionRow>
+          {activeClips.slice(0, visibleCount).map((clip) => (
+            <PanelSectionRow key={clip.id}>
+              <div>
+                <Field
+                  label={activeGroup === ALL_CLIPS || activeGroup === UNKNOWN_CLIPS ? clip.game_name : new Date(clip.recorded_at).toLocaleString()}
+                  description={activeGroup === ALL_CLIPS || activeGroup === UNKNOWN_CLIPS
+                    ? `${new Date(clip.recorded_at).toLocaleString()} • ${formatDuration(clip.duration_seconds)}`
+                    : formatDuration(clip.duration_seconds)}
+                  bottomSeparator="none"
+                >
+                  <Toggle
+                    value={Boolean(selected[clip.id])}
+                    onChange={(value) => setSelected({ ...selected, [clip.id]: value })}
+                  />
+                </Field>
+                {selected[clip.id] && (
+                  <TextField
+                    label="Optional filename"
+                    value={names[clip.id] ?? ""}
+                    onChange={(event) => setNames({ ...names, [clip.id]: event.target.value })}
+                  />
+                )}
+              </div>
+            </PanelSectionRow>
+          ))}
+          {!activeClips.length && <PanelSectionRow><div>No matching clips.</div></PanelSectionRow>}
+          {visibleCount < activeClips.length && (
+            <PanelSectionRow>
+              <ButtonItem layout="below" onClick={() => setVisibleCount(visibleCount + PAGE_SIZE)}>
+                Load more ({activeClips.length - visibleCount} remaining)
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={!chosen.length || Boolean(jobId)} onClick={() => void exportNow()}>
+              {jobId ? "Exporting…" : `Export ${chosen.length || "selected"} clip${chosen.length === 1 ? "" : "s"}`}
+            </ButtonItem>
+          </PanelSectionRow>
+        </PanelSection>
+      )}
       {job && (
         <PanelSection title="Export progress">
           <PanelSectionRow><ProgressBar nProgress={job.progress} /></PanelSectionRow>

@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -31,10 +32,12 @@ class BackendTests(unittest.TestCase):
             old = os.environ.get("DECKCLIP_STEAM_ROOT")
             os.environ["DECKCLIP_STEAM_ROOT"] = root_name
             try:
-                found = backend._discover()
+                all_found = backend._discover()
+                found = backend._discover(3)
             finally:
                 if old is None: os.environ.pop("DECKCLIP_STEAM_ROOT", None)
                 else: os.environ["DECKCLIP_STEAM_ROOT"] = old
+            self.assertEqual(4, len(all_found))
             self.assertEqual(3, len(found))
             self.assertEqual("clip_123_20260104_120000", Path(found[0]["id"]).name)
             self.assertEqual(62.5, found[0]["duration_seconds"])
@@ -71,6 +74,22 @@ class BackendTests(unittest.TestCase):
                 '"AppState" { "appid" "123" "name" "Example Game" }'
             )
             self.assertEqual("Example Game", backend._app_names([root])["123"])
+
+    def test_reads_non_steam_shortcut_names(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            app_id = 0x81234567
+            shortcut = (
+                b"\x00shortcuts\0"
+                b"\x000\0"
+                b"\x02appid\0" + struct.pack("<I", app_id) +
+                b"\x01appname\0Emulated Example\0"
+                b"\x08\x08"
+            )
+            path = Path(folder_name) / "shortcuts.vdf"
+            path.write_bytes(shortcut)
+            names = backend._shortcut_names(path)
+            self.assertEqual("Emulated Example", names[str(app_id)])
+            self.assertEqual("Emulated Example", names[str((app_id << 32) | 0x02000000)])
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg tools not installed")
     def test_remuxes_all_dash_fragments(self):

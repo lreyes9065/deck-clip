@@ -3,6 +3,7 @@ import {
   Button,
   Dropdown,
   Field,
+  Focusable,
   PanelSection,
   PanelSectionRow,
   ProgressBar,
@@ -12,7 +13,7 @@ import {
 } from "@decky/ui";
 import { callable, definePlugin, toaster } from "@decky/api";
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { FaFilm } from "react-icons/fa";
+import { FaCheck, FaFilm, FaMobileAlt, FaShare, FaTimes, FaTrash } from "react-icons/fa";
 
 type Clip = {
   id: string;
@@ -303,21 +304,36 @@ function Content() {
                   bottomSeparator="none"
                 />
               </PanelSectionRow>
-              {confirmTrash === item.filename ? <>
-                <PanelSectionRow>
-                  <ButtonItem layout="below" onClick={() => void moveToTrash(item.filename)}>Confirm move to Trash</ButtonItem>
-                </PanelSectionRow>
-                <PanelSectionRow>
-                  <ButtonItem layout="below" onClick={() => setConfirmTrash(null)}>Cancel</ButtonItem>
-                </PanelSectionRow>
-              </> : <>
-                <PanelSectionRow>
-                  <ButtonItem layout="below" onClick={() => void beginTransfer(item.filename)}>Send to phone</ButtonItem>
-                </PanelSectionRow>
-                <PanelSectionRow>
-                  <ButtonItem layout="below" onClick={() => setConfirmTrash(item.filename)}>Move to Trash</ButtonItem>
-                </PanelSectionRow>
-              </>}
+              <PanelSectionRow>
+                <Focusable
+                  flow-children="horizontal"
+                  style={{ display: "flex", justifyContent: "flex-end", gap: "8px", width: "100%" }}
+                >
+                  {confirmTrash === item.filename ? <>
+                    <Button
+                      aria-label="Confirm move to Trash"
+                      style={{ width: "46px", minWidth: "46px", padding: 0 }}
+                      onClick={() => void moveToTrash(item.filename)}
+                    ><FaCheck /></Button>
+                    <Button
+                      aria-label="Cancel"
+                      style={{ width: "46px", minWidth: "46px", padding: 0 }}
+                      onClick={() => setConfirmTrash(null)}
+                    ><FaTimes /></Button>
+                  </> : <>
+                    <Button
+                      aria-label="Send to phone"
+                      style={{ width: "54px", minWidth: "54px", padding: 0 }}
+                      onClick={() => void beginTransfer(item.filename)}
+                    ><span style={{ display: "flex", alignItems: "center", gap: "3px" }}><FaMobileAlt /><FaShare size={12} /></span></Button>
+                    <Button
+                      aria-label="Move to Trash"
+                      style={{ width: "46px", minWidth: "46px", padding: 0 }}
+                      onClick={() => setConfirmTrash(item.filename)}
+                    ><FaTrash /></Button>
+                  </>}
+                </Focusable>
+              </PanelSectionRow>
             </Fragment>
           ))}
           {!transfer && !exports.length && <PanelSectionRow><div>No exported MP4 files found.</div></PanelSectionRow>}
@@ -334,7 +350,10 @@ function Content() {
           <PanelSectionRow>
             <div style={{ width: "100%" }}>
               <div style={{ fontSize: "12px", opacity: 0.7, marginBottom: "6px", textAlign: "left" }}>Filter</div>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%" }}>
+              <Focusable
+                flow-children="horizontal"
+                style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%" }}
+              >
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <Dropdown
                     key={gameFilter ?? "no-game-filter"}
@@ -362,7 +381,7 @@ function Content() {
                     ×
                   </Button>
                 )}
-              </div>
+              </Focusable>
             </div>
           </PanelSectionRow>
           <PanelSectionRow><Field label={gameFilter ? "Selected game" : "Recently recorded"} /></PanelSectionRow>

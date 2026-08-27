@@ -46,7 +46,7 @@ Do not use GitHub's automatic **Source code** ZIP and do not ZIP the repository 
 pnpm run release
 ```
 
-This builds, tests, and validates `release/DeckClip-0.6.1.zip`. Its relevant layout is:
+This builds, tests, and validates `release/DeckClip-0.6.2.zip`. Its relevant layout is:
 
 ```text
 DeckClip/
@@ -61,10 +61,10 @@ DeckClip/
 
 ### Install through Decky
 
-1. Copy `release/DeckClip-0.6.1.zip` to the Deck's Downloads folder. Do not extract it.
+1. Copy `release/DeckClip-0.6.2.zip` to the Deck's Downloads folder. Do not extract it.
 2. In Gaming Mode, open the Quick Access menu (`…`) and Decky Loader.
 3. Open Decky settings and enable **Developer Mode** if needed.
-4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.6.1.zip` from Downloads.
+4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.6.2.zip` from Downloads.
 5. Wait for Decky to finish installing, then reload Decky or restart Steam if DeckClip does not immediately appear.
 
 Decky owns its installed plugin directory and makes it read-only; that is expected. Install updates by generating and selecting a newer ZIP rather than editing `/home/deck/homebrew/plugins/DeckClip/` directly.
@@ -90,7 +90,7 @@ The command is intentionally limited to DeckClip's output folder. New exports ar
 7. Open each MP4 from Dolphin or a media player and check video, game audio, and any extra audio track you recorded.
 8. Export the same names again and confirm DeckClip creates `name (2).mp4` rather than overwriting the first file.
 9. Open **Manage exported clips**, move one MP4 to Trash, and confirm Steam's original clip remains available.
-10. For another exported clip, choose **Send to phone**. Put the Deck and iPhone on the same trusted Wi-Fi network and scan the QR code. It opens the MP4 as Safari's top-level video; use Safari's Share button and **Save Video** to add it to Photos.
+10. For another exported clip, choose **Send to phone**. Put the Deck and iPhone on the same trusted Wi-Fi network, scan the QR code, and use **Download clip** to save the MP4 to Files. iOS does not let this local webpage select Photos as the download destination.
 11. Confirm DeckClip reports the completed download, then press **Stop sharing**. Also confirm an uncompleted share expires after ten minutes.
 
 Backend-only discovery tests can be run on any machine with Python 3.9+:

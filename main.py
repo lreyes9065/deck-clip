@@ -666,9 +666,7 @@ class Plugin:
             await server.wait_closed()
             raise RuntimeError("Could not start the local transfer server")
         port = int(sockets[0].getsockname()[1])
-        # Point the QR directly at the MP4 so iOS opens its top-level native
-        # video viewer, where Safari exposes Share and Save Video.
-        url = f"http://{address}:{port}/{token}/video"
+        url = f"http://{address}:{port}/{token}/"
         self.transfer = {
             "server": server,
             "token": token,
@@ -779,9 +777,7 @@ class Plugin:
                     "<title>DeckClip transfer</title><style>"
                     "body{background:#111;color:#fff;font:17px system-ui;margin:0 auto;max-width:760px;padding:24px}"
                     "a{color:#7cc4ff}small{color:#bbb}</style><h1>DeckClip</h1>"
-                    f"<p>{filename}</p><p><a href='video'>Open video in Safari</a></p>"
-                    "<p>Then use Safari's Share button and choose Save Video.</p>"
-                    "<p><a href='download' download>Save to Files instead</a></p>"
+                    f"<p>{filename}</p><p><a href='download' download>Download clip</a></p>"
                     "<small>This temporary link works only on the same local network.</small>"
                 ).encode("utf-8")
                 await self._send_http(writer, "200 OK", {

@@ -39,6 +39,18 @@ type TransferStatus = {
 const ALL_CLIPS = "__all__";
 const UNKNOWN_CLIPS = "__unknown__";
 const PAGE_SIZE = 25;
+const GAME_FILTER_KEY = "deckclip.gameFilter";
+
+const loadGameFilter = () => {
+  try { return window.localStorage.getItem(GAME_FILTER_KEY); }
+  catch { return null; }
+};
+const saveGameFilter = (value: string | null) => {
+  try {
+    if (value) window.localStorage.setItem(GAME_FILTER_KEY, value);
+    else window.localStorage.removeItem(GAME_FILTER_KEY);
+  } catch { /* DeckClip still works if Steam disables local storage. */ }
+};
 
 const listClips = callable<[], Clip[]>("list_clips");
 const startExport = callable<[items: ExportItem[]], { job_id: string }>("start_export");
@@ -67,7 +79,7 @@ function Content() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [names, setNames] = useState<Record<string, string>>({});
   const [activeGroup, setActiveGroup] = useState<string | null>(null);
-  const [gameFilter, setGameFilter] = useState<string | null>(null);
+  const [gameFilter, setGameFilter] = useState<string | null>(loadGameFilter);
   const [clipQuery, setClipQuery] = useState("");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [managingExports, setManagingExports] = useState(false);
@@ -199,6 +211,16 @@ function Content() {
     ...games.map((game) => ({ data: game.id, label: `${game.name} (${game.clips.length})` })),
     ...(unknownClips.length ? [{ data: UNKNOWN_CLIPS, label: `Unknown / Unmatched (${unknownClips.length})` }] : []),
   ], [games, unknownClips.length]);
+  useEffect(() => {
+    if (!clips.length || !gameFilter) return;
+    const valid = gameFilter === UNKNOWN_CLIPS
+      ? unknownClips.length > 0
+      : games.some((game) => game.id === gameFilter);
+    if (!valid) {
+      saveGameFilter(null);
+      setGameFilter(null);
+    }
+  }, [clips.length, gameFilter, games, unknownClips.length]);
   const displayedGames = useMemo(() => {
     if (gameFilter === UNKNOWN_CLIPS) return [];
     if (gameFilter) return games.filter((game) => game.id === gameFilter);
@@ -265,7 +287,7 @@ function Content() {
                 <div style={{ overflowWrap: "anywhere" }}>{transfer.url}</div>
               </PanelSectionRow>
               <PanelSectionRow>
-                <div>{transfer.downloads ? "Video opened. In Safari, tap Share, then Save Video." : "Scan to open the video in Safari. Keep both devices on the same trusted Wi-Fi network."}</div>
+                <div>{transfer.downloads ? "Download completed. You can stop sharing." : "Keep DeckClip open and both devices on the same trusted Wi-Fi network."}</div>
               </PanelSectionRow>
               <PanelSectionRow>
                 <ButtonItem layout="below" onClick={() => void endTransfer()}>Stop sharing</ButtonItem>
@@ -310,17 +332,26 @@ function Content() {
           </PanelSectionRow>
           <PanelSectionRow>
             <DropdownItem
+              key={gameFilter ?? "no-game-filter"}
               label="Choose from all games"
               menuLabel="DeckClip games"
               rgOptions={gameOptions}
               selectedOption={gameFilter}
               strDefaultLabel="Select a game"
-              onChange={(option) => setGameFilter(String(option?.data ?? option))}
+              onChange={(option) => {
+                const value = typeof option?.data === "string"
+                  ? option.data
+                  : typeof option === "string" ? option : null;
+                if (value) {
+                  saveGameFilter(value);
+                  setGameFilter(value);
+                }
+              }}
             />
           </PanelSectionRow>
           {gameFilter && (
             <PanelSectionRow>
-              <ButtonItem layout="below" onClick={() => setGameFilter(null)}>✕ Clear game filter</ButtonItem>
+              <ButtonItem layout="below" onClick={() => { saveGameFilter(null); setGameFilter(null); }}>✕ Clear game filter</ButtonItem>
             </PanelSectionRow>
           )}
           <PanelSectionRow><Field label={gameFilter ? "Selected game" : "Recently recorded"} /></PanelSectionRow>

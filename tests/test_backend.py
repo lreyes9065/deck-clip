@@ -126,11 +126,16 @@ class BackendTests(unittest.TestCase):
                     }
                     denied = await request("/wrong/download")
                     self.assertIn(b"404 Not Found", denied)
+                    landing = await request("/secret/")
+                    self.assertIn(b"<video src='video'", landing)
+                    inline = await request("/secret/video", "Range: bytes=0-1\r\n")
+                    self.assertIn(b"Content-Disposition: inline", inline)
+                    self.assertTrue(inline.endswith(b"01"))
                     ranged = await request("/secret/download", "Range: bytes=2-5\r\n")
                     self.assertIn(b"206 Partial Content", ranged)
                     self.assertTrue(ranged.endswith(b"2345"))
                     public = await plugin.get_transfer_status()
-                    self.assertEqual(1, public["downloads"])
+                    self.assertEqual(2, public["downloads"])
                 finally:
                     plugin.transfer = None
                     backend.OUTPUT_DIR = previous_output

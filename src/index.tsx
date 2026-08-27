@@ -1,5 +1,6 @@
 import {
   ButtonItem,
+  DropdownItem,
   Field,
   PanelSection,
   PanelSectionRow,
@@ -9,7 +10,7 @@ import {
   staticClasses,
 } from "@decky/ui";
 import { callable, definePlugin, toaster } from "@decky/api";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { FaFilm } from "react-icons/fa";
 
 type Clip = {
@@ -66,7 +67,6 @@ function Content() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [names, setNames] = useState<Record<string, string>>({});
   const [activeGroup, setActiveGroup] = useState<string | null>(null);
-  const [gameQuery, setGameQuery] = useState("");
   const [clipQuery, setClipQuery] = useState("");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [managingExports, setManagingExports] = useState(false);
@@ -155,6 +155,11 @@ function Content() {
     return () => window.clearInterval(timer);
   }, [jobId]);
   useEffect(() => {
+    if (job?.state !== "complete") return;
+    const timer = window.setTimeout(() => setJob(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [job?.state]);
+  useEffect(() => {
     if (!transfer || transfer.state === "inactive" || transfer.state === "expired") return;
     const timer = window.setInterval(async () => {
       try {
@@ -189,11 +194,11 @@ function Content() {
     () => clips.filter((clip) => clip.game_name.startsWith("Steam app ") || clip.game_name === "Steam clip"),
     [clips],
   );
-  const filteredGames = useMemo(() => {
-    const query = gameQuery.trim().toLocaleLowerCase();
-    if (!query) return games;
-    return games.filter((game) => game.name.toLocaleLowerCase().includes(query) || game.id.includes(query));
-  }, [games, gameQuery]);
+  const gameOptions = useMemo(() => [
+    { data: ALL_CLIPS, label: `All Clips (${clips.length})` },
+    ...games.map((game) => ({ data: game.id, label: `${game.name} (${game.clips.length})` })),
+    ...(unknownClips.length ? [{ data: UNKNOWN_CLIPS, label: `Unknown / Unmatched (${unknownClips.length})` }] : []),
+  ], [clips.length, games, unknownClips.length]);
   const activeName = activeGroup === ALL_CLIPS
     ? "All Clips"
     : activeGroup === UNKNOWN_CLIPS
@@ -262,24 +267,30 @@ function Content() {
               </PanelSectionRow>
             </>
           ) : exports.map((item) => (
-            <PanelSectionRow key={item.filename}>
-              <Field
-                label={item.filename}
-                description={`${formatSize(item.size_bytes)} • ${new Date(item.modified_at).toLocaleString()}`}
-                bottomSeparator="none"
-              />
-              {confirmTrash === item.filename ? (
-                <div style={{ display: "flex", gap: "8px" }}>
+            <Fragment key={item.filename}>
+              <PanelSectionRow>
+                <Field
+                  label={item.filename}
+                  description={`${formatSize(item.size_bytes)} • ${new Date(item.modified_at).toLocaleString()}`}
+                  bottomSeparator="none"
+                />
+              </PanelSectionRow>
+              {confirmTrash === item.filename ? <>
+                <PanelSectionRow>
                   <ButtonItem layout="below" onClick={() => void moveToTrash(item.filename)}>Confirm move to Trash</ButtonItem>
+                </PanelSectionRow>
+                <PanelSectionRow>
                   <ButtonItem layout="below" onClick={() => setConfirmTrash(null)}>Cancel</ButtonItem>
-                </div>
-              ) : (
-                <div>
+                </PanelSectionRow>
+              </> : <>
+                <PanelSectionRow>
                   <ButtonItem layout="below" onClick={() => void beginTransfer(item.filename)}>Send to phone</ButtonItem>
+                </PanelSectionRow>
+                <PanelSectionRow>
                   <ButtonItem layout="below" onClick={() => setConfirmTrash(item.filename)}>Move to Trash</ButtonItem>
-                </div>
-              )}
-            </PanelSectionRow>
+                </PanelSectionRow>
+              </>}
+            </Fragment>
           ))}
           {!transfer && !exports.length && <PanelSectionRow><div>No exported MP4 files found.</div></PanelSectionRow>}
           {message && <PanelSectionRow><div>{message}</div></PanelSectionRow>}
@@ -290,18 +301,20 @@ function Content() {
       ) : activeGroup === null ? (
         <PanelSection title="Choose a game">
           <PanelSectionRow>
-            <TextField
-              label="Search games or App IDs"
-              value={gameQuery}
-              onChange={(event) => setGameQuery(event.target.value)}
-            />
+            <ButtonItem layout="below" disabled={Boolean(jobId)} onClick={openExports}>Manage exported clips</ButtonItem>
           </PanelSectionRow>
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={() => setActiveGroup(ALL_CLIPS)}>
-              All Clips ({clips.length})
-            </ButtonItem>
+            <DropdownItem
+              label="Choose from all games"
+              menuLabel="DeckClip games"
+              rgOptions={gameOptions}
+              selectedOption={activeGroup}
+              strDefaultLabel="Select a game"
+              onChange={(option) => setActiveGroup(String(option.data))}
+            />
           </PanelSectionRow>
-          {filteredGames.map((game) => (
+          <PanelSectionRow><Field label="Recently recorded" /></PanelSectionRow>
+          {games.slice(0, 3).map((game) => (
             <PanelSectionRow key={game.id}>
               <ButtonItem
                 layout="below"
@@ -311,18 +324,7 @@ function Content() {
               </ButtonItem>
             </PanelSectionRow>
           ))}
-          {unknownClips.length > 0 && (
-            <PanelSectionRow>
-              <ButtonItem layout="below" onClick={() => setActiveGroup(UNKNOWN_CLIPS)}>
-                Unknown / Unmatched ({unknownClips.length})
-              </ButtonItem>
-            </PanelSectionRow>
-          )}
-          {!filteredGames.length && gameQuery && <PanelSectionRow><div>No matching games.</div></PanelSectionRow>}
           {message && <PanelSectionRow><div>{message}</div></PanelSectionRow>}
-          <PanelSectionRow>
-            <ButtonItem layout="below" disabled={Boolean(jobId)} onClick={openExports}>Manage exported clips</ButtonItem>
-          </PanelSectionRow>
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={Boolean(jobId)} onClick={() => void refresh()}>Refresh library</ButtonItem>
           </PanelSectionRow>

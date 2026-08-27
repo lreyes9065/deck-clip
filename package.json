@@ -1,6 +1,6 @@
 {
   "name": "deckclip",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Export Steam Game Recording clips from Decky Loader",
   "type": "module",
   "scripts": {

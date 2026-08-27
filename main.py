@@ -774,18 +774,23 @@ class Plugin:
                 filename = html.escape(transfer["filename"])
                 body = (
                     "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-                    "<title>DeckClip transfer</title><h1>DeckClip</h1>"
-                    f"<p>{filename}</p><p><a href='download'>Download clip</a></p>"
-                    "<p>This temporary link works only on the same local network.</p>"
+                    "<title>DeckClip transfer</title><style>"
+                    "body{background:#111;color:#fff;font:17px system-ui;margin:0 auto;max-width:760px;padding:24px}"
+                    "video{background:#000;border-radius:12px;display:block;margin:18px 0;max-height:70vh;width:100%}"
+                    "a{color:#7cc4ff}small{color:#bbb}</style><h1>DeckClip</h1>"
+                    f"<p>{filename}</p><video src='video' controls playsinline preload='metadata'></video>"
+                    "<p><strong>To save to Photos:</strong> open the video, tap Share, then Save Video.</p>"
+                    "<p><a href='download' download>Save to Files instead</a></p>"
+                    "<small>This temporary link works only on the same local network.</small>"
                 ).encode("utf-8")
                 await self._send_http(writer, "200 OK", {
                     "Content-Type": "text/html; charset=utf-8",
-                    "Content-Security-Policy": "default-src 'none'; style-src 'none'; img-src 'none'; base-uri 'none'; form-action 'none'",
+                    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; media-src 'self'; base-uri 'none'; form-action 'none'",
                     "X-Frame-Options": "DENY",
                     "Content-Length": str(len(body)),
                 }, b"" if method == "HEAD" else body)
                 return
-            if target != base + "download":
+            if target not in (base + "video", base + "download"):
                 await self._send_http(writer, "404 Not Found", {"Content-Length": "0"})
                 return
             try:
@@ -816,7 +821,7 @@ class Plugin:
             download_name = quote(transfer["filename"], safe="")
             response_headers = {
                 "Content-Type": "video/mp4",
-                "Content-Disposition": f"attachment; filename*=UTF-8''{download_name}",
+                "Content-Disposition": f"{'attachment' if target.endswith('/download') else 'inline'}; filename*=UTF-8''{download_name}",
                 "Accept-Ranges": "bytes",
                 "Content-Length": str(length),
             }

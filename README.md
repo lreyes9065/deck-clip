@@ -46,7 +46,7 @@ Do not use GitHub's automatic **Source code** ZIP and do not ZIP the repository 
 pnpm run release
 ```
 
-This builds, tests, and validates `release/DeckClip-0.5.0.zip`. Its relevant layout is:
+This builds, tests, and validates `release/DeckClip-0.6.0.zip`. Its relevant layout is:
 
 ```text
 DeckClip/
@@ -61,10 +61,10 @@ DeckClip/
 
 ### Install through Decky
 
-1. Copy `release/DeckClip-0.5.0.zip` to the Deck's Downloads folder. Do not extract it.
+1. Copy `release/DeckClip-0.6.0.zip` to the Deck's Downloads folder. Do not extract it.
 2. In Gaming Mode, open the Quick Access menu (`…`) and Decky Loader.
 3. Open Decky settings and enable **Developer Mode** if needed.
-4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.5.0.zip` from Downloads.
+4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.6.0.zip` from Downloads.
 5. Wait for Decky to finish installing, then reload Decky or restart Steam if DeckClip does not immediately appear.
 
 Decky owns its installed plugin directory and makes it read-only; that is expected. Install updates by generating and selecting a newer ZIP rather than editing `/home/deck/homebrew/plugins/DeckClip/` directly.
@@ -81,8 +81,8 @@ The command is intentionally limited to DeckClip's output folder. New exports ar
 
 ### Test checklist
 
-1. Search for installed and non-Steam games and confirm the game containing the newest clip appears first when unfiltered.
-2. Open a game, All Clips, and Unknown / Unmatched; confirm clips are newest-first, initially unchecked, and loaded 25 at a time.
+1. Confirm the three games with the newest recordings appear on the first page and **Choose from all games** contains the full library.
+2. Open a game, All Clips, and Unknown / Unmatched from the game selector; confirm clips are newest-first, initially unchecked, and loaded 25 at a time.
 3. Filter clips by game name, localized date/time, or displayed duration.
 4. Toggle one, several, or all desired clips. Add a filename to at least one selected clip.
 5. Start export and watch both overall and per-clip progress.
@@ -90,7 +90,7 @@ The command is intentionally limited to DeckClip's output folder. New exports ar
 7. Open each MP4 from Dolphin or a media player and check video, game audio, and any extra audio track you recorded.
 8. Export the same names again and confirm DeckClip creates `name (2).mp4` rather than overwriting the first file.
 9. Open **Manage exported clips**, move one MP4 to Trash, and confirm Steam's original clip remains available.
-10. For another exported clip, choose **Send to phone**. Put the Deck and iPhone on the same trusted Wi-Fi network, scan the QR code with the iPhone camera, and tap **Download clip** in Safari.
+10. For another exported clip, choose **Send to phone**. Put the Deck and iPhone on the same trusted Wi-Fi network, scan the QR code, play the video, then use Safari's Share menu and **Save Video** to add it to Photos. **Save to Files instead** remains available.
 11. Confirm DeckClip reports the completed download, then press **Stop sharing**. Also confirm an uncompleted share expires after ten minutes.
 
 Backend-only discovery tests can be run on any machine with Python 3.9+:

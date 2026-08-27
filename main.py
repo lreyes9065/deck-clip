@@ -4,6 +4,7 @@ import asyncio
 import copy
 import os
 import shutil
+import sys
 import tempfile
 import time
 import uuid
@@ -11,6 +12,14 @@ from pathlib import Path
 from typing import Any
 
 import decky
+
+# Decky loads main.py directly rather than importing the plugin directory as a
+# Python package. Resolve bundled modules from this read-only installed folder
+# explicitly, independent of Decky's process working directory.
+PLUGIN_DIR = Path(__file__).resolve().parent
+if str(PLUGIN_DIR) not in sys.path:
+    sys.path.insert(0, str(PLUGIN_DIR))
+
 from backend.exports import export_path, list_exports, safe_output_name as _safe_output_name
 from backend.library import (
     APPINFO_V41_MAGIC,

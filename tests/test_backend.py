@@ -22,6 +22,30 @@ spec.loader.exec_module(backend)
 
 
 class BackendTests(unittest.TestCase):
+    def test_main_loads_when_plugin_directory_is_not_on_python_path(self):
+        project = Path(__file__).parents[1]
+        loader = """
+import importlib.util, sys, types
+from pathlib import Path
+sys.modules['decky'] = types.SimpleNamespace(
+    DECKY_USER_HOME='/home/deck',
+    logger=types.SimpleNamespace(info=lambda *a: None, exception=lambda *a: None),
+)
+path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location('deckclip_isolated', path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+assert module.Plugin
+"""
+        with tempfile.TemporaryDirectory() as working_dir:
+            result = subprocess.run(
+                [sys.executable, "-c", loader, str(project / "main.py")],
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_discovers_three_newest_and_reads_duration(self):
         with tempfile.TemporaryDirectory() as root_name:
             root = Path(root_name)

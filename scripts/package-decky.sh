@@ -25,6 +25,7 @@ cp "$project_dir/plugin.json" "$plugin_dir/plugin.json"
 cp "$project_dir/main.py" "$plugin_dir/main.py"
 cp "$project_dir/README.md" "$plugin_dir/README.md"
 cp "$project_dir/LICENSE" "$plugin_dir/LICENSE"
+cp "$project_dir/THIRD_PARTY_NOTICES.md" "$plugin_dir/THIRD_PARTY_NOTICES.md"
 cp "$project_dir/dist/index.js" "$plugin_dir/dist/index.js"
 
 archive="$release_dir/$plugin_name-$version.zip"

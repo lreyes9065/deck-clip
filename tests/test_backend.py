@@ -67,6 +67,76 @@ class BackendTests(unittest.TestCase):
             finally:
                 backend.OUTPUT_DIR = previous
 
+    def test_qr_matrix_has_expected_version_and_finder_patterns(self):
+        matrix = backend._qr_matrix("http://192.168.1.10:12345/example/")
+        self.assertEqual(37, len(matrix))
+        self.assertTrue(all(len(row) == 37 for row in matrix))
+        expected_finder = [
+            "1111111",
+            "1000001",
+            "1011101",
+            "1011101",
+            "1011101",
+            "1000001",
+            "1111111",
+        ]
+        self.assertEqual(expected_finder, [row[:7] for row in matrix[:7]])
+
+    def test_lan_transfer_requires_token_and_supports_ranges(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as folder_name:
+                folder = Path(folder_name)
+                previous_output = backend.OUTPUT_DIR
+                backend.OUTPUT_DIR = folder
+                plugin = backend.Plugin()
+                await plugin._main()
+
+                class MemoryWriter:
+                    def __init__(self):
+                        self.data = bytearray()
+
+                    def write(self, value):
+                        self.data.extend(value)
+
+                    async def drain(self):
+                        pass
+
+                    def close(self):
+                        pass
+
+                    async def wait_closed(self):
+                        pass
+
+                async def request(target: str, extra: str = "") -> bytes:
+                    reader = asyncio.StreamReader()
+                    reader.feed_data(f"GET {target} HTTP/1.1\r\nHost: test\r\n{extra}\r\n".encode())
+                    reader.feed_eof()
+                    writer = MemoryWriter()
+                    await plugin._handle_transfer_client(reader, writer)
+                    return bytes(writer.data)
+
+                try:
+                    path = folder / "clip.mp4"
+                    path.write_bytes(b"0123456789")
+                    plugin.transfer = {
+                        "server": None, "token": "secret", "path": path,
+                        "filename": path.name, "url": "http://127.0.0.1:1234/secret/",
+                        "expires_at": backend.time.time() + 60, "downloads": 0,
+                        "bytes_sent": 0, "state": "ready",
+                    }
+                    denied = await request("/wrong/download")
+                    self.assertIn(b"404 Not Found", denied)
+                    ranged = await request("/secret/download", "Range: bytes=2-5\r\n")
+                    self.assertIn(b"206 Partial Content", ranged)
+                    self.assertTrue(ranged.endswith(b"2345"))
+                    public = await plugin.get_transfer_status()
+                    self.assertEqual(1, public["downloads"])
+                finally:
+                    plugin.transfer = None
+                    backend.OUTPUT_DIR = previous_output
+
+        asyncio.run(scenario())
+
     def test_orders_and_joins_every_stream_fragment(self):
         with tempfile.TemporaryDirectory() as folder_name:
             folder = Path(folder_name)

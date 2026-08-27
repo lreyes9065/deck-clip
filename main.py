@@ -3,16 +3,21 @@ from __future__ import annotations
 import asyncio
 import copy
 import datetime as dt
+import html
 import json
 import mmap
 import os
 import re
+import secrets
 import shutil
+import socket
 import struct
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import decky
 
@@ -22,6 +27,195 @@ CLIP_RE = re.compile(r"^clip_(?P<app>\d+|downloaded)_(?P<date>\d{8})_(?P<time>\d
 SAFE_NAME_RE = re.compile(r"[^\w .()\[\]-]+", re.UNICODE)
 INIT_STREAM_RE = re.compile(r"^init-stream(?P<id>\d+)\.m4s$")
 APPINFO_V41_MAGIC = b"\x29\x44\x56\x07"
+TRANSFER_TTL_SECONDS = 10 * 60
+
+
+def _qr_gf_multiply(left: int, right: int) -> int:
+    result = 0
+    for bit in range(7, -1, -1):
+        result = (result << 1) ^ ((result >> 7) * 0x11D)
+        result ^= ((left >> bit) & 1) * right
+    return result
+
+
+def _qr_reed_solomon(data: list[int], degree: int) -> list[int]:
+    divisor = [0] * degree
+    divisor[-1] = 1
+    root = 1
+    for _ in range(degree):
+        for index in range(degree):
+            divisor[index] = _qr_gf_multiply(divisor[index], root)
+            if index + 1 < degree:
+                divisor[index] ^= divisor[index + 1]
+        root = _qr_gf_multiply(root, 2)
+    remainder = [0] * degree
+    for value in data:
+        factor = value ^ remainder.pop(0)
+        remainder.append(0)
+        for index, coefficient in enumerate(divisor):
+            remainder[index] ^= _qr_gf_multiply(coefficient, factor)
+    return remainder
+
+
+def _qr_mask(mask: int, row: int, column: int) -> bool:
+    if mask == 0:
+        return (row + column) % 2 == 0
+    if mask == 1:
+        return row % 2 == 0
+    if mask == 2:
+        return column % 3 == 0
+    if mask == 3:
+        return (row + column) % 3 == 0
+    if mask == 4:
+        return (row // 2 + column // 3) % 2 == 0
+    if mask == 5:
+        return (row * column) % 2 + (row * column) % 3 == 0
+    if mask == 6:
+        return ((row * column) % 2 + (row * column) % 3) % 2 == 0
+    return ((row + column) % 2 + (row * column) % 3) % 2 == 0
+
+
+def _qr_format_bits(mask: int) -> int:
+    data = (1 << 3) | mask  # Error correction level L is binary 01.
+    remainder = data
+    for _ in range(10):
+        remainder = (remainder << 1) ^ ((remainder >> 9) * 0x537)
+    return ((data << 10) | remainder) ^ 0x5412
+
+
+def _qr_draw_format(modules: list[list[bool]], mask: int) -> None:
+    size = len(modules)
+    bits = _qr_format_bits(mask)
+    for index in range(6):
+        modules[index][8] = bool((bits >> index) & 1)
+    modules[7][8] = bool((bits >> 6) & 1)
+    modules[8][8] = bool((bits >> 7) & 1)
+    modules[8][7] = bool((bits >> 8) & 1)
+    for index in range(9, 15):
+        modules[8][14 - index] = bool((bits >> index) & 1)
+    for index in range(8):
+        modules[8][size - 1 - index] = bool((bits >> index) & 1)
+    for index in range(8, 15):
+        modules[size - 15 + index][8] = bool((bits >> index) & 1)
+    modules[size - 8][8] = True
+
+
+def _qr_penalty(modules: list[list[bool]]) -> int:
+    size = len(modules)
+    score = 0
+    for lines in (modules, [[modules[row][column] for row in range(size)] for column in range(size)]):
+        for line in lines:
+            run_color = line[0]
+            run_length = 1
+            for value in line[1:]:
+                if value == run_color:
+                    run_length += 1
+                else:
+                    if run_length >= 5:
+                        score += 3 + run_length - 5
+                    run_color = value
+                    run_length = 1
+            if run_length >= 5:
+                score += 3 + run_length - 5
+            pattern = "".join("1" if value else "0" for value in line)
+            score += 40 * (pattern.count("00001011101") + pattern.count("10111010000"))
+    for row in range(size - 1):
+        for column in range(size - 1):
+            value = modules[row][column]
+            if all(modules[row + dy][column + dx] == value for dy in (0, 1) for dx in (0, 1)):
+                score += 3
+    dark = sum(value for row in modules for value in row)
+    score += abs(dark * 20 - size * size * 10) // (size * size) * 10
+    return score
+
+
+def _qr_matrix(text: str) -> list[str]:
+    """Create a fixed version-5-L QR matrix for a short local transfer URL."""
+    payload = text.encode("utf-8")
+    if len(payload) > 106:
+        raise ValueError("Transfer URL is too long for the QR code")
+    bits: list[int] = [0, 1, 0, 0]
+    bits.extend((len(payload) >> shift) & 1 for shift in range(7, -1, -1))
+    for value in payload:
+        bits.extend((value >> shift) & 1 for shift in range(7, -1, -1))
+    bits.extend([0] * min(4, 864 - len(bits)))
+    bits.extend([0] * ((8 - len(bits) % 8) % 8))
+    data = [sum(bits[offset + bit] << (7 - bit) for bit in range(8)) for offset in range(0, len(bits), 8)]
+    pad = (0xEC, 0x11)
+    while len(data) < 108:
+        data.append(pad[(len(data) - (len(bits) // 8)) % 2])
+    codewords = data + _qr_reed_solomon(data, 26)
+    code_bits = [(value >> shift) & 1 for value in codewords for shift in range(7, -1, -1)]
+
+    size = 37
+    base = [[False] * size for _ in range(size)]
+    function = [[False] * size for _ in range(size)]
+
+    def set_function(row: int, column: int, value: bool) -> None:
+        if 0 <= row < size and 0 <= column < size:
+            base[row][column] = value
+            function[row][column] = True
+
+    for center_row, center_column in ((3, 3), (3, size - 4), (size - 4, 3)):
+        for dy in range(-4, 5):
+            for dx in range(-4, 5):
+                distance = max(abs(dx), abs(dy))
+                set_function(center_row + dy, center_column + dx, distance not in (2, 4))
+    for index in range(size):
+        if not function[6][index]:
+            set_function(6, index, index % 2 == 0)
+        if not function[index][6]:
+            set_function(index, 6, index % 2 == 0)
+    for dy in range(-2, 3):
+        for dx in range(-2, 3):
+            set_function(30 + dy, 30 + dx, max(abs(dx), abs(dy)) != 1)
+    for index in range(9):
+        if index != 6:
+            set_function(8, index, False)
+            set_function(index, 8, False)
+    for index in range(8):
+        set_function(size - 1 - index, 8, False)
+        set_function(8, size - 1 - index, False)
+    set_function(size - 8, 8, True)
+
+    best: list[list[bool]] | None = None
+    best_score: int | None = None
+    for mask in range(8):
+        modules = [row[:] for row in base]
+        bit_index = 0
+        right = size - 1
+        while right >= 1:
+            if right == 6:
+                right -= 1
+            upward = ((right + 1) & 2) == 0
+            for vertical in range(size):
+                row = size - 1 - vertical if upward else vertical
+                for column in (right, right - 1):
+                    if not function[row][column]:
+                        value = bool(code_bits[bit_index]) if bit_index < len(code_bits) else False
+                        modules[row][column] = value ^ _qr_mask(mask, row, column)
+                        bit_index += 1
+            right -= 2
+        _qr_draw_format(modules, mask)
+        score = _qr_penalty(modules)
+        if best_score is None or score < best_score:
+            best, best_score = modules, score
+    assert best is not None
+    return ["".join("1" if value else "0" for value in row) for row in best]
+
+
+def _lan_address() -> str:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("192.0.2.1", 9))
+        address = sock.getsockname()[0]
+    except OSError as error:
+        raise RuntimeError("Connect the Steam Deck to a local network before sharing") from error
+    finally:
+        sock.close()
+    if address.startswith("127.") or address == "0.0.0.0":
+        raise RuntimeError("Could not determine the Steam Deck's local network address")
+    return address
 
 
 def _steam_roots() -> list[Path]:
@@ -421,9 +615,12 @@ class Plugin:
     async def _main(self):
         self.jobs: dict[str, dict[str, Any]] = {}
         self.tasks: set[asyncio.Task] = set()
+        self.transfer: dict[str, Any] | None = None
+        self.transfer_expiry: asyncio.Task | None = None
         decky.logger.info("DeckClip loaded")
 
     async def _unload(self):
+        await self._stop_transfer()
         for task in self.tasks:
             task.cancel()
         if self.tasks:
@@ -450,6 +647,210 @@ class Plugin:
             detail = stderr.decode(errors="replace").strip()
             raise RuntimeError(detail or "Could not move the export to Trash")
         return {"filename": filename}
+
+    async def start_transfer(self, filename: str) -> dict[str, Any]:
+        path = await asyncio.to_thread(_export_path, filename)
+        await self._stop_transfer()
+        address = await asyncio.to_thread(_lan_address)
+        token = secrets.token_urlsafe(32)
+        expires_at = time.time() + TRANSFER_TTL_SECONDS
+        server = await asyncio.start_server(
+            self._handle_transfer_client,
+            host="0.0.0.0",
+            port=0,
+            limit=16 * 1024,
+        )
+        sockets = server.sockets or []
+        if not sockets:
+            server.close()
+            await server.wait_closed()
+            raise RuntimeError("Could not start the local transfer server")
+        port = int(sockets[0].getsockname()[1])
+        url = f"http://{address}:{port}/{token}/"
+        self.transfer = {
+            "server": server,
+            "token": token,
+            "path": path,
+            "filename": path.name,
+            "url": url,
+            "expires_at": expires_at,
+            "downloads": 0,
+            "bytes_sent": 0,
+            "state": "ready",
+        }
+        self.transfer_expiry = asyncio.create_task(self._expire_transfer(token))
+        return self._transfer_public_status(include_qr=True)
+
+    async def get_transfer_status(self) -> dict[str, Any]:
+        if self.transfer is None:
+            return {"state": "inactive"}
+        if time.time() >= self.transfer["expires_at"]:
+            await self._stop_transfer()
+            return {"state": "expired"}
+        return self._transfer_public_status(include_qr=False)
+
+    async def stop_transfer(self) -> dict[str, str]:
+        await self._stop_transfer()
+        return {"state": "inactive"}
+
+    def _transfer_public_status(self, include_qr: bool) -> dict[str, Any]:
+        assert self.transfer is not None
+        status = {
+            "state": self.transfer["state"],
+            "filename": self.transfer["filename"],
+            "url": self.transfer["url"],
+            "expires_at": dt.datetime.fromtimestamp(self.transfer["expires_at"]).astimezone().isoformat(),
+            "downloads": self.transfer["downloads"],
+            "bytes_sent": self.transfer["bytes_sent"],
+        }
+        if include_qr:
+            status["qr"] = _qr_matrix(self.transfer["url"])
+        return status
+
+    async def _expire_transfer(self, token: str):
+        try:
+            await asyncio.sleep(TRANSFER_TTL_SECONDS)
+            if self.transfer is not None and secrets.compare_digest(self.transfer["token"], token):
+                await self._stop_transfer()
+        except asyncio.CancelledError:
+            pass
+
+    async def _stop_transfer(self):
+        transfer = self.transfer
+        self.transfer = None
+        expiry = self.transfer_expiry
+        self.transfer_expiry = None
+        if expiry is not None and expiry is not asyncio.current_task():
+            expiry.cancel()
+            await asyncio.gather(expiry, return_exceptions=True)
+        if transfer is not None:
+            server = transfer["server"]
+            server.close()
+            await server.wait_closed()
+
+    async def _send_http(self, writer: asyncio.StreamWriter, status: str, headers: dict[str, str], body: bytes = b""):
+        safe_headers = {
+            "Connection": "close",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            **headers,
+        }
+        head = f"HTTP/1.1 {status}\r\n" + "".join(f"{key}: {value}\r\n" for key, value in safe_headers.items()) + "\r\n"
+        writer.write(head.encode("ascii") + body)
+        await writer.drain()
+
+    async def _handle_transfer_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        try:
+            try:
+                request = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+            except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, TimeoutError):
+                await self._send_http(writer, "400 Bad Request", {"Content-Length": "0"})
+                return
+            if len(request) > 8192:
+                await self._send_http(writer, "431 Request Header Fields Too Large", {"Content-Length": "0"})
+                return
+            lines = request.decode("iso-8859-1").split("\r\n")
+            parts = lines[0].split(" ")
+            if len(parts) != 3 or parts[0] not in ("GET", "HEAD") or not parts[2].startswith("HTTP/1."):
+                await self._send_http(writer, "405 Method Not Allowed", {"Allow": "GET, HEAD", "Content-Length": "0"})
+                return
+            method, target, _ = parts
+            headers = {}
+            for line in lines[1:]:
+                if not line:
+                    break
+                if ":" not in line:
+                    await self._send_http(writer, "400 Bad Request", {"Content-Length": "0"})
+                    return
+                key, value = line.split(":", 1)
+                headers[key.strip().lower()] = value.strip()
+            transfer = self.transfer
+            if transfer is None or time.time() >= transfer["expires_at"]:
+                await self._send_http(writer, "410 Gone", {"Content-Length": "0"})
+                return
+            base = f"/{transfer['token']}/"
+            if target == base:
+                filename = html.escape(transfer["filename"])
+                body = (
+                    "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
+                    "<title>DeckClip transfer</title><h1>DeckClip</h1>"
+                    f"<p>{filename}</p><p><a href='download'>Download clip</a></p>"
+                    "<p>This temporary link works only on the same local network.</p>"
+                ).encode("utf-8")
+                await self._send_http(writer, "200 OK", {
+                    "Content-Type": "text/html; charset=utf-8",
+                    "Content-Security-Policy": "default-src 'none'; style-src 'none'; img-src 'none'; base-uri 'none'; form-action 'none'",
+                    "X-Frame-Options": "DENY",
+                    "Content-Length": str(len(body)),
+                }, b"" if method == "HEAD" else body)
+                return
+            if target != base + "download":
+                await self._send_http(writer, "404 Not Found", {"Content-Length": "0"})
+                return
+            try:
+                path = await asyncio.to_thread(_export_path, transfer["filename"])
+                size = path.stat().st_size
+            except (OSError, ValueError):
+                await self._send_http(writer, "410 Gone", {"Content-Length": "0"})
+                return
+            start, end = 0, max(0, size - 1)
+            response_status = "200 OK"
+            range_header = headers.get("range")
+            if range_header:
+                match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+                if not match or (not match.group(1) and not match.group(2)):
+                    await self._send_http(writer, "416 Range Not Satisfiable", {"Content-Range": f"bytes */{size}", "Content-Length": "0"})
+                    return
+                if match.group(1):
+                    start = int(match.group(1))
+                    end = min(int(match.group(2) or end), end)
+                else:
+                    suffix = min(int(match.group(2)), size)
+                    start = size - suffix
+                if start >= size or end < start:
+                    await self._send_http(writer, "416 Range Not Satisfiable", {"Content-Range": f"bytes */{size}", "Content-Length": "0"})
+                    return
+                response_status = "206 Partial Content"
+            length = end - start + 1 if size else 0
+            download_name = quote(transfer["filename"], safe="")
+            response_headers = {
+                "Content-Type": "video/mp4",
+                "Content-Disposition": f"attachment; filename*=UTF-8''{download_name}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(length),
+            }
+            if response_status.startswith("206"):
+                response_headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+            await self._send_http(writer, response_status, response_headers)
+            if method == "HEAD" or not length:
+                return
+            sent = 0
+            with path.open("rb") as input_file:
+                input_file.seek(start)
+                remaining = length
+                while remaining and self.transfer is transfer and time.time() < transfer["expires_at"]:
+                    chunk = await asyncio.to_thread(input_file.read, min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    writer.write(chunk)
+                    await writer.drain()
+                    sent += len(chunk)
+                    remaining -= len(chunk)
+                    transfer["bytes_sent"] += len(chunk)
+            if sent == length:
+                transfer["downloads"] += 1
+                transfer["state"] = "downloaded"
+        except (ConnectionError, BrokenPipeError):
+            pass
+        except Exception:
+            decky.logger.exception("DeckClip transfer request failed")
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except ConnectionError:
+                pass
 
     async def start_export(self, items: list[dict[str, str]]) -> dict[str, str]:
         available = {clip["id"]: clip for clip in await self.list_clips()}

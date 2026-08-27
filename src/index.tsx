@@ -25,6 +25,15 @@ type JobClip = { id: string; display_name: string; progress: number; state: stri
 type Job = { state: string; progress: number; output_dir: string; clips: JobClip[]; error?: string };
 type GameGroup = { id: string; name: string; clips: Clip[] };
 type ExportedFile = { filename: string; size_bytes: number; modified_at: string };
+type TransferStatus = {
+  state: string;
+  filename?: string;
+  url?: string;
+  expires_at?: string;
+  downloads?: number;
+  bytes_sent?: number;
+  qr?: string[];
+};
 
 const ALL_CLIPS = "__all__";
 const UNKNOWN_CLIPS = "__unknown__";
@@ -35,6 +44,9 @@ const startExport = callable<[items: ExportItem[]], { job_id: string }>("start_e
 const getExportStatus = callable<[jobId: string], Job>("get_export_status");
 const listExports = callable<[], ExportedFile[]>("list_exports");
 const trashExport = callable<[filename: string], { filename: string }>("trash_export");
+const startTransfer = callable<[filename: string], TransferStatus>("start_transfer");
+const getTransferStatus = callable<[], TransferStatus>("get_transfer_status");
+const stopTransfer = callable<[], { state: string }>("stop_transfer");
 
 const formatDuration = (seconds: number | null) => {
   if (seconds === null) return "duration unknown";
@@ -60,6 +72,7 @@ function Content() {
   const [managingExports, setManagingExports] = useState(false);
   const [exports, setExports] = useState<ExportedFile[]>([]);
   const [confirmTrash, setConfirmTrash] = useState<string | null>(null);
+  const [transfer, setTransfer] = useState<TransferStatus | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [message, setMessage] = useState("Looking for clips…");
@@ -98,6 +111,21 @@ function Content() {
       setMessage(`Could not move export to Trash: ${String(error)}`);
     }
   };
+  const beginTransfer = async (filename: string) => {
+    try {
+      setMessage("");
+      setTransfer(await startTransfer(filename));
+    } catch (error) {
+      setMessage(`Could not start phone transfer: ${String(error)}`);
+    }
+  };
+  const endTransfer = async () => {
+    try {
+      await stopTransfer();
+    } finally {
+      setTransfer(null);
+    }
+  };
 
   useEffect(() => { void refresh(); }, []);
   useEffect(() => {
@@ -126,6 +154,24 @@ function Content() {
     }, 500);
     return () => window.clearInterval(timer);
   }, [jobId]);
+  useEffect(() => {
+    if (!transfer || transfer.state === "inactive" || transfer.state === "expired") return;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await getTransferStatus();
+        if (status.state === "inactive" || status.state === "expired") {
+          setTransfer(null);
+          window.clearInterval(timer);
+        } else {
+          setTransfer((current) => ({ ...current, ...status, qr: current?.qr }));
+        }
+      } catch (error) {
+        setMessage(`Lost transfer status: ${String(error)}`);
+        window.clearInterval(timer);
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [transfer?.state]);
 
   const chosen = useMemo(() => clips.filter((clip) => selected[clip.id]), [clips, selected]);
   const games = useMemo<GameGroup[]>(() => {
@@ -183,9 +229,39 @@ function Content() {
       {managingExports ? (
         <PanelSection title="Exported clips">
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={() => { setManagingExports(false); setConfirmTrash(null); }}>‹ Back to games</ButtonItem>
+            <ButtonItem layout="below" onClick={() => { void endTransfer(); setManagingExports(false); setConfirmTrash(null); }}>‹ Back to games</ButtonItem>
           </PanelSectionRow>
-          {exports.map((item) => (
+          {transfer?.qr && transfer.url ? (
+            <>
+              <PanelSectionRow>
+                <Field
+                  label="Scan with your iPhone camera"
+                  description={`${transfer.filename} • expires ${transfer.expires_at ? new Date(transfer.expires_at).toLocaleTimeString() : "soon"}`}
+                />
+              </PanelSectionRow>
+              <PanelSectionRow>
+                <div style={{ background: "white", padding: "28px", margin: "0 auto", width: "240px" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: `repeat(${transfer.qr.length}, 1fr)` }}>
+                    {transfer.qr.flatMap((row, rowIndex) => Array.from(row).map((value, columnIndex) => (
+                      <div
+                        key={`${rowIndex}-${columnIndex}`}
+                        style={{ background: value === "1" ? "black" : "white", aspectRatio: "1" }}
+                      />
+                    )))}
+                  </div>
+                </div>
+              </PanelSectionRow>
+              <PanelSectionRow>
+                <div style={{ overflowWrap: "anywhere" }}>{transfer.url}</div>
+              </PanelSectionRow>
+              <PanelSectionRow>
+                <div>{transfer.downloads ? "Download completed. You can stop sharing." : "Keep DeckClip open and both devices on the same trusted Wi-Fi network."}</div>
+              </PanelSectionRow>
+              <PanelSectionRow>
+                <ButtonItem layout="below" onClick={() => void endTransfer()}>Stop sharing</ButtonItem>
+              </PanelSectionRow>
+            </>
+          ) : exports.map((item) => (
             <PanelSectionRow key={item.filename}>
               <Field
                 label={item.filename}
@@ -198,11 +274,14 @@ function Content() {
                   <ButtonItem layout="below" onClick={() => setConfirmTrash(null)}>Cancel</ButtonItem>
                 </div>
               ) : (
-                <ButtonItem layout="below" onClick={() => setConfirmTrash(item.filename)}>Move to Trash</ButtonItem>
+                <div>
+                  <ButtonItem layout="below" onClick={() => void beginTransfer(item.filename)}>Send to phone</ButtonItem>
+                  <ButtonItem layout="below" onClick={() => setConfirmTrash(item.filename)}>Move to Trash</ButtonItem>
+                </div>
               )}
             </PanelSectionRow>
           ))}
-          {!exports.length && <PanelSectionRow><div>No exported MP4 files found.</div></PanelSectionRow>}
+          {!transfer && !exports.length && <PanelSectionRow><div>No exported MP4 files found.</div></PanelSectionRow>}
           {message && <PanelSectionRow><div>{message}</div></PanelSectionRow>}
           <PanelSectionRow>
             <ButtonItem layout="below" onClick={() => void refreshExports()}>Refresh exports</ButtonItem>

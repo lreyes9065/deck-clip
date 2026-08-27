@@ -1,6 +1,7 @@
 import {
   ButtonItem,
-  DropdownItem,
+  Button,
+  Dropdown,
   Field,
   PanelSection,
   PanelSectionRow,
@@ -331,29 +332,39 @@ function Content() {
             <ButtonItem layout="below" disabled={Boolean(jobId)} onClick={openExports}>Manage exported clips</ButtonItem>
           </PanelSectionRow>
           <PanelSectionRow>
-            <DropdownItem
-              key={gameFilter ?? "no-game-filter"}
-              label="Choose from all games"
-              menuLabel="DeckClip games"
-              rgOptions={gameOptions}
-              selectedOption={gameFilter}
-              strDefaultLabel="Select a game"
-              onChange={(option) => {
-                const value = typeof option?.data === "string"
-                  ? option.data
-                  : typeof option === "string" ? option : null;
-                if (value) {
-                  saveGameFilter(value);
-                  setGameFilter(value);
-                }
-              }}
-            />
+            <div style={{ width: "100%" }}>
+              <div style={{ fontSize: "12px", opacity: 0.7, marginBottom: "6px", textAlign: "left" }}>Filter</div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Dropdown
+                    key={gameFilter ?? "no-game-filter"}
+                    menuLabel="DeckClip games"
+                    rgOptions={gameOptions}
+                    selectedOption={gameFilter}
+                    strDefaultLabel="Select a game"
+                    onChange={(option) => {
+                      const value = typeof option?.data === "string"
+                        ? option.data
+                        : typeof option === "string" ? option : null;
+                      if (value) {
+                        saveGameFilter(value);
+                        setGameFilter(value);
+                      }
+                    }}
+                  />
+                </div>
+                {gameFilter && (
+                  <Button
+                    aria-label="Clear game filter"
+                    style={{ width: "40px", minWidth: "40px", padding: 0 }}
+                    onClick={() => { saveGameFilter(null); setGameFilter(null); }}
+                  >
+                    ×
+                  </Button>
+                )}
+              </div>
+            </div>
           </PanelSectionRow>
-          {gameFilter && (
-            <PanelSectionRow>
-              <ButtonItem layout="below" onClick={() => { saveGameFilter(null); setGameFilter(null); }}>✕ Clear game filter</ButtonItem>
-            </PanelSectionRow>
-          )}
           <PanelSectionRow><Field label={gameFilter ? "Selected game" : "Recently recorded"} /></PanelSectionRow>
           {displayedGames.map((game) => (
             <PanelSectionRow key={game.id}>

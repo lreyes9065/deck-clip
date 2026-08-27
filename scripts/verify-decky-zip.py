@@ -20,6 +20,7 @@ REQUIRED = {
     "DeckClip/backend/qr.py",
     "DeckClip/backend/transfer.py",
     "DeckClip/dist/index.js",
+    "DeckClip/docs/iphone-shortcut.md",
     "DeckClip/LICENSE",
 }
 

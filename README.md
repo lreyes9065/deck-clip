@@ -10,6 +10,8 @@ DeckClip runs without root privileges. Its export manager lists only direct MP4 
 
 An exported clip can also be shared directly to a phone. DeckClip starts a temporary local-only web server, displays a QR code, and stops sharing after ten minutes or when the user presses **Stop sharing**. After a complete download it keeps a 30-second retry window, then closes automatically. No LocalSend plugin, cloud account, or internet upload is required.
 
+The phone page includes an optional **Save to Photos** action for an explicitly configured two-action iPhone Shortcut, plus **Download to Files** as the universal fallback. See `docs/iphone-shortcut.md` for setup and security details.
+
 ## Prototype architecture
 
 - `src/index.tsx` is the small Decky entry point and screen coordinator. `src/pages/` contains the library, clip browser, and export manager screens; `src/components/` contains reusable UI; `src/hooks/` owns export and transfer polling; and typed backend calls, models, persistence, and formatting live under `src/api/`, `src/types/`, and `src/utils/`.
@@ -46,7 +48,7 @@ Do not use GitHub's automatic **Source code** ZIP and do not ZIP the repository 
 pnpm run release
 ```
 
-This builds, tests, and validates `release/DeckClip-0.8.1.zip`. Its relevant layout is:
+This builds, tests, and validates `release/DeckClip-0.9.0.zip`. Its relevant layout is:
 
 ```text
 DeckClip/
@@ -58,6 +60,7 @@ DeckClip/
 │   ├── qr.py
 │   └── transfer.py
 ├── dist/index.js
+├── docs/iphone-shortcut.md
 ├── main.py
 ├── package.json
 ├── plugin.json
@@ -68,10 +71,10 @@ DeckClip/
 
 ### Install through Decky
 
-1. Copy `release/DeckClip-0.8.1.zip` to the Deck's Downloads folder. Do not extract it.
+1. Copy `release/DeckClip-0.9.0.zip` to the Deck's Downloads folder. Do not extract it.
 2. In Gaming Mode, open the Quick Access menu (`…`) and Decky Loader.
 3. Open Decky settings and enable **Developer Mode** if needed.
-4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.8.1.zip` from Downloads.
+4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.9.0.zip` from Downloads.
 5. Wait for Decky to finish installing, then reload Decky or restart Steam if DeckClip does not immediately appear.
 
 Decky owns its installed plugin directory and makes it read-only; that is expected. Install updates by generating and selecting a newer ZIP rather than editing `/home/deck/homebrew/plugins/DeckClip/` directly.
@@ -97,7 +100,7 @@ The command is intentionally limited to DeckClip's output folder. New exports ar
 7. Open each MP4 from Dolphin or a media player and check video, game audio, and any extra audio track you recorded.
 8. Export the same names again and confirm DeckClip creates `name (2).mp4` rather than overwriting the first file.
 9. Open **Manage exported clips**, move one MP4 to Trash, and confirm Steam's original clip remains available.
-10. For another exported clip, choose **Send to phone**. Put the Deck and iPhone on the same trusted Wi-Fi network, scan the QR code, and use **Download clip** to save the MP4 to Files. iOS does not let this local webpage select Photos as the download destination.
+10. For another exported clip, choose **Send to phone**. Put the Deck and iPhone on the same trusted Wi-Fi network and scan the QR code. With the documented Shortcut installed, test **Save to Photos**; otherwise verify **Download to Files** still works.
 11. Confirm DeckClip reports the completed download, then press **Stop sharing**. Also confirm an uncompleted share expires after ten minutes.
 
 Backend-only discovery tests can be run on any machine with Python 3.9+:

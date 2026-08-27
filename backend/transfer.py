@@ -174,12 +174,23 @@ class TransferManager:
             base = f"/{transfer['token']}/"
             if target == base:
                 filename = html.escape(transfer["filename"])
+                download_url = transfer["url"] + "download"
+                shortcut_url = (
+                    "shortcuts://run-shortcut?name=DeckClip%20Save%20to%20Photos"
+                    f"&input=text&text={quote(download_url, safe='')}"
+                )
+                safe_shortcut_url = html.escape(shortcut_url, quote=True)
                 body = (
                     "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
                     "<title>DeckClip transfer</title><style>"
                     "body{background:#111;color:#fff;font:17px system-ui;margin:0 auto;max-width:760px;padding:24px}"
-                    "a{color:#7cc4ff}small{color:#bbb}</style><h1>DeckClip</h1>"
-                    f"<p>{filename}</p><p><a href='download' download>Download clip</a></p>"
+                    "a.button{background:#1473e6;border-radius:10px;color:#fff;display:block;font-weight:600;margin:12px 0;padding:14px;text-align:center;text-decoration:none}"
+                    "a.secondary{background:#333}details{color:#bbb;margin:20px 0}small{color:#bbb}</style><h1>DeckClip</h1>"
+                    f"<p>{filename}</p><a class='button' href='{safe_shortcut_url}'>Save to Photos</a>"
+                    "<a class='button secondary' href='download' download>Download to Files</a>"
+                    "<details><summary>First-time Shortcut setup</summary>"
+                    "<p>Create a shortcut named <strong>DeckClip Save to Photos</strong> with two actions: "
+                    "Get Contents of URL using Shortcut Input, then Save to Photo Album.</p></details>"
                     "<small>This temporary link works only on the same local network.</small>"
                 ).encode("utf-8")
                 await self._send_http(writer, "200 OK", {

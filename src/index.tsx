@@ -1,7 +1,8 @@
-import { definePlugin, toaster } from "@decky/api";
-import { staticClasses } from "@decky/ui";
+import { definePlugin, routerHook, toaster } from "@decky/api";
+import { DialogButton, Focusable, Navigation, staticClasses } from "@decky/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaFilm } from "react-icons/fa";
+import { BsGearFill } from "react-icons/bs";
 import { listClips, listExports, trashExport } from "./api/deckclip";
 import { ExportProgress } from "./components/ExportProgress";
 import { ALL_CLIPS, PAGE_SIZE, UNKNOWN_CLIPS } from "./constants";
@@ -9,10 +10,13 @@ import { useExportJob } from "./hooks/useExportJob";
 import { usePhoneTransfer } from "./hooks/usePhoneTransfer";
 import { ClipsPage } from "./pages/ClipsPage";
 import { ExportManagerPage } from "./pages/ExportManagerPage";
+import { HelpSettingsPage } from "./pages/HelpSettingsPage";
 import { LibraryPage } from "./pages/LibraryPage";
 import type { Clip, ExportedFile, GameGroup } from "./types";
 import { formatDuration } from "./utils/formatting";
 import { loadGameFilter, saveGameFilter } from "./utils/gameFilter";
+
+const HELP_ROUTE = "/deckclip/help";
 
 function Content() {
   const [clips, setClips] = useState<Clip[]>([]);
@@ -24,6 +28,7 @@ function Content() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [managingExports, setManagingExports] = useState(false);
   const [exports, setExports] = useState<ExportedFile[]>([]);
+  const [selectedExports, setSelectedExports] = useState<Record<string, boolean>>({});
   const [confirmTrash, setConfirmTrash] = useState<string | null>(null);
   const [message, setMessage] = useState("Looking for clips…");
   const reportError = useCallback((value: string) => setMessage(value), []);
@@ -40,7 +45,7 @@ function Content() {
     } catch (error) { setMessage(`Could not load clips: ${String(error)}`); }
   };
   const refreshExports = async () => {
-    try { setExports(await listExports()); setMessage(""); }
+    try { setExports(await listExports()); setSelectedExports({}); setMessage(""); }
     catch (error) { setMessage(`Could not load exports: ${String(error)}`); }
   };
 
@@ -93,8 +98,10 @@ function Content() {
       toaster.toast({ title: "Moved to Trash", body: filename });
     } catch (error) { setMessage(`Could not move export to Trash: ${String(error)}`); }
   };
-  const beginTransfer = async (filename: string) => {
-    try { setMessage(""); await phoneTransfer.begin(filename); }
+  const beginTransfer = async () => {
+    const filenames = exports.filter((item) => selectedExports[item.filename]).map((item) => item.filename);
+    if (!filenames.length) return;
+    try { setMessage(""); await phoneTransfer.begin(filenames); }
     catch (error) { setMessage(`Could not start phone transfer: ${String(error)}`); }
   };
   const exportNow = async () => {
@@ -107,10 +114,11 @@ function Content() {
   return <>
     {managingExports ? (
       <ExportManagerPage
-        confirmTrash={confirmTrash} exports={exports} message={message} transfer={phoneTransfer.transfer}
+        confirmTrash={confirmTrash} exports={exports} message={message} selected={selectedExports} transfer={phoneTransfer.transfer}
         onBack={() => { void phoneTransfer.stop(); setManagingExports(false); setConfirmTrash(null); }}
         onCancelTrash={() => setConfirmTrash(null)} onConfirmTrash={(filename) => void moveToTrash(filename)}
-        onRefresh={() => void refreshExports()} onSend={(filename) => void beginTransfer(filename)}
+        onRefresh={() => void refreshExports()} onSendSelected={() => void beginTransfer()}
+        onSelect={(filename, value) => setSelectedExports((current) => ({ ...current, [filename]: value }))}
         onStartTrash={setConfirmTrash} onStopTransfer={() => void phoneTransfer.stop()}
       />
     ) : activeGroup === null ? (
@@ -136,10 +144,25 @@ function Content() {
   </>;
 }
 
-export default definePlugin(() => ({
-  name: "DeckClip",
-  titleView: <div className={staticClasses.Title}>DeckClip</div>,
-  content: <Content />,
-  icon: <FaFilm />,
-  onDismount() {},
-}));
+export default definePlugin(() => {
+  // Match child routes too: SidebarNavigation owns topic navigation.
+  routerHook.addRoute(HELP_ROUTE, HelpSettingsPage);
+  const openHelp = () => {
+    Navigation.Navigate(`${HELP_ROUTE}/iphone`);
+    Navigation.CloseSideMenus();
+  };
+  return {
+    name: "DeckClip",
+    titleView: (
+      <Focusable flow-children="horizontal" style={{ alignItems: "center", display: "flex", justifyContent: "space-between", width: "100%" }}>
+        <div className={staticClasses.Title}>DeckClip</div>
+        <DialogButton aria-label="Open Help and Settings" onOKActionDescription="Help & Settings" style={{ height: "28px", width: "40px", minWidth: 0, padding: "10px 12px" }} onClick={openHelp}>
+          <BsGearFill style={{ marginTop: "-4px", display: "block" }} />
+        </DialogButton>
+      </Focusable>
+    ),
+    content: <Content />,
+    icon: <FaFilm />,
+    onDismount() { routerHook.removeRoute(HELP_ROUTE); },
+  };
+});

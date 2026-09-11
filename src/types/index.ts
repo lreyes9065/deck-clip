@@ -15,6 +15,9 @@ export type ExportedFile = { filename: string; size_bytes: number; modified_at: 
 export type TransferStatus = {
   state: string;
   filename?: string;
+  filenames?: string[];
+  file_count?: number;
+  completed_files?: number;
   url?: string;
   expires_at?: string;
   downloads?: number;

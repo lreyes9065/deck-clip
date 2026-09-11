@@ -3,6 +3,7 @@
 import asyncio
 import datetime as dt
 import html
+import json
 import re
 import secrets
 import socket
@@ -15,6 +16,7 @@ from .qr import _qr_matrix
 
 TRANSFER_TTL_SECONDS = 10 * 60
 TRANSFER_COMPLETION_GRACE_SECONDS = 30
+MAX_TRANSFER_FILES = 20
 
 def _lan_address() -> str:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -37,8 +39,17 @@ class TransferManager:
         self.transfer_expiry: asyncio.Task | None = None
         self.transfer_completion: asyncio.Task | None = None
 
-    async def start_transfer(self, filename: str) -> dict[str, Any]:
-        path = await asyncio.to_thread(self._export_path, filename)
+    async def start_transfer(self, filenames: list[str] | str) -> dict[str, Any]:
+        # Accept a string for compatibility with older frontends during upgrades.
+        if isinstance(filenames, str):
+            filenames = [filenames]
+        if not isinstance(filenames, list) or not filenames:
+            raise ValueError("Select at least one exported clip")
+        if len(filenames) > MAX_TRANSFER_FILES:
+            raise ValueError(f"Select no more than {MAX_TRANSFER_FILES} clips at once")
+        if any(not isinstance(name, str) for name in filenames) or len(set(filenames)) != len(filenames):
+            raise ValueError("The selected exported clips are invalid")
+        paths = [await asyncio.to_thread(self._export_path, name) for name in filenames]
         await self._stop_transfer()
         address = await asyncio.to_thread(_lan_address)
         token = secrets.token_urlsafe(32)
@@ -59,11 +70,14 @@ class TransferManager:
         self.transfer = {
             "server": server,
             "token": token,
-            "path": path,
-            "filename": path.name,
+            "files": [
+                {"id": index, "path": path, "filename": path.name, "complete": False}
+                for index, path in enumerate(paths)
+            ],
             "url": url,
             "expires_at": expires_at,
             "downloads": 0,
+            "completed_files": 0,
             "bytes_sent": 0,
             "state": "ready",
         }
@@ -86,7 +100,10 @@ class TransferManager:
         assert self.transfer is not None
         status = {
             "state": self.transfer["state"],
-            "filename": self.transfer["filename"],
+            "filename": self.transfer["files"][0]["filename"] if len(self.transfer["files"]) == 1 else None,
+            "filenames": [entry["filename"] for entry in self.transfer["files"]],
+            "file_count": len(self.transfer["files"]),
+            "completed_files": self.transfer["completed_files"],
             "url": self.transfer["url"],
             "expires_at": dt.datetime.fromtimestamp(self.transfer["expires_at"]).astimezone().isoformat(),
             "downloads": self.transfer["downloads"],
@@ -173,25 +190,32 @@ class TransferManager:
                 return
             base = f"/{transfer['token']}/"
             if target == base:
-                filename = html.escape(transfer["filename"])
-                download_url = transfer["url"] + "download"
+                manifest_url = transfer["url"] + "manifest"
                 shortcut_url = (
                     "shortcuts://run-shortcut?name=DeckClip%20Save%20to%20Photos"
-                    f"&input=text&text={quote(download_url, safe='')}"
+                    f"&input=text&text={quote(manifest_url, safe='')}"
                 )
                 safe_shortcut_url = html.escape(shortcut_url, quote=True)
+                file_links = "".join(
+                    f"<li><span>{html.escape(entry['filename'])}</span>"
+                    f"<a href='file/{entry['id']}' download>Download</a></li>"
+                    for entry in transfer["files"]
+                )
+                count = len(transfer["files"])
                 body = (
                     "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
                     "<title>DeckClip transfer</title><style>"
-                    "body{background:#111;color:#fff;font:17px system-ui;margin:0 auto;max-width:760px;padding:24px}"
-                    "a.button{background:#1473e6;border-radius:10px;color:#fff;display:block;font-weight:600;margin:12px 0;padding:14px;text-align:center;text-decoration:none}"
-                    "a.secondary{background:#333}details{color:#bbb;margin:20px 0}small{color:#bbb}</style><h1>DeckClip</h1>"
-                    f"<p>{filename}</p><a class='button' href='{safe_shortcut_url}'>Save to Photos</a>"
-                    "<a class='button secondary' href='download' download>Download to Files</a>"
-                    "<details><summary>First-time Shortcut setup</summary>"
-                    "<p>Create a shortcut named <strong>DeckClip Save to Photos</strong> with two actions: "
-                    "Get Contents of URL using Shortcut Input, then Save to Photo Album.</p></details>"
-                    "<small>This temporary link works only on the same local network.</small>"
+                    "body{background:#111;box-sizing:border-box;color:#fff;display:flex;flex-direction:column;font:17px system-ui;margin:0 auto;max-width:760px;min-height:100svh;padding:24px}"
+                    "a{color:#70b7ff}a.button{background:#1473e6;border-radius:10px;color:#fff;display:block;font-weight:600;margin:12px 0;padding:14px;text-align:center;text-decoration:none}"
+                    "li{align-items:center;display:flex;gap:12px;justify-content:space-between;padding:10px 0}li span{overflow-wrap:anywhere}"
+                    "aside{background:#1d1d1d;border-radius:10px;color:#ddd;margin:20px 0;padding:14px}"
+                    "footer{margin-top:auto;padding-top:18px}small{color:#bbb}</style><h1>DeckClip</h1>"
+                    f"<p>{count} selected clip{'s' if count != 1 else ''}</p>"
+                    f"<ul>{file_links}</ul>"
+                    "<aside><strong>First time?</strong> Set up the iPhone Shortcut from DeckClip’s "
+                    "<strong>Help &amp; Settings</strong> screen before starting a transfer.</aside>"
+                    f"<footer><small>This temporary link works only on the same local network.</small>"
+                    f"<a class='button' href='{safe_shortcut_url}'>Save {'all ' if count != 1 else ''}to Photos</a></footer>"
                 ).encode("utf-8")
                 await self._send_http(writer, "200 OK", {
                     "Content-Type": "text/html; charset=utf-8",
@@ -200,11 +224,29 @@ class TransferManager:
                     "Content-Length": str(len(body)),
                 }, b"" if method == "HEAD" else body)
                 return
-            if target not in (base + "video", base + "download"):
+            if target == base + "manifest":
+                manifest = json.dumps({"files": [
+                    {"name": entry["filename"], "url": transfer["url"] + f"file/{entry['id']}"}
+                    for entry in transfer["files"]
+                ]}, ensure_ascii=False).encode("utf-8")
+                await self._send_http(writer, "200 OK", {
+                    "Content-Type": "application/json; charset=utf-8",
+                    "Content-Length": str(len(manifest)),
+                }, b"" if method == "HEAD" else manifest)
+                return
+            file_match = re.fullmatch(re.escape(base) + r"file/(\d+)", target)
+            if file_match is None:
                 await self._send_http(writer, "404 Not Found", {"Content-Length": "0"})
                 return
+            file_index = int(file_match.group(1))
+            if file_index >= len(transfer["files"]):
+                await self._send_http(writer, "404 Not Found", {"Content-Length": "0"})
+                return
+            file_entry = transfer["files"][file_index]
             try:
-                path = await asyncio.to_thread(self._export_path, transfer["filename"])
+                # Revalidate containment and existence for every request. Never trust
+                # a path sent by the browser or retained across filesystem changes.
+                path = await asyncio.to_thread(self._export_path, file_entry["filename"])
                 size = path.stat().st_size
             except (OSError, ValueError):
                 await self._send_http(writer, "410 Gone", {"Content-Length": "0"})
@@ -228,10 +270,10 @@ class TransferManager:
                     return
                 response_status = "206 Partial Content"
             length = end - start + 1 if size else 0
-            download_name = quote(transfer["filename"], safe="")
+            download_name = quote(file_entry["filename"], safe="")
             response_headers = {
                 "Content-Type": "video/mp4",
-                "Content-Disposition": f"{'attachment' if target.endswith('/download') else 'inline'}; filename*=UTF-8''{download_name}",
+                "Content-Disposition": f"attachment; filename*=UTF-8''{download_name}",
                 "Accept-Ranges": "bytes",
                 "Content-Length": str(length),
             }
@@ -254,9 +296,13 @@ class TransferManager:
                     remaining -= len(chunk)
                     transfer["bytes_sent"] += len(chunk)
             if sent == length:
-                transfer["downloads"] += 1
-                transfer["state"] = "downloaded"
-                if start == 0 and end == size - 1 and self.transfer_completion is None:
+                if start == 0 and end == size - 1 and not file_entry["complete"]:
+                    file_entry["complete"] = True
+                    transfer["downloads"] += 1
+                    transfer["completed_files"] += 1
+                all_complete = transfer["completed_files"] == len(transfer["files"])
+                transfer["state"] = "downloaded" if all_complete else "downloading"
+                if all_complete and self.transfer_completion is None:
                     self.transfer_completion = asyncio.create_task(
                         self._close_after_completion(transfer["token"])
                     )

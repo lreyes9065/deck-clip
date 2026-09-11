@@ -22,6 +22,15 @@ spec.loader.exec_module(backend)
 
 
 class BackendTests(unittest.TestCase):
+    def test_transfer_rejects_empty_duplicate_and_oversized_batches(self):
+        manager = transfer_backend.TransferManager(lambda name: Path(name), fake_decky.logger)
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            asyncio.run(manager.start_transfer([]))
+        with self.assertRaisesRegex(ValueError, "invalid"):
+            asyncio.run(manager.start_transfer(["clip.mp4", "clip.mp4"]))
+        with self.assertRaisesRegex(ValueError, "no more than"):
+            asyncio.run(manager.start_transfer([f"clip-{index}.mp4" for index in range(21)]))
+
     def test_main_loads_when_plugin_directory_is_not_on_python_path(self):
         project = Path(__file__).parents[1]
         loader = """
@@ -108,7 +117,7 @@ assert module.Plugin
         ]
         self.assertEqual(expected_finder, [row[:7] for row in matrix[:7]])
 
-    def test_lan_transfer_requires_token_and_supports_ranges(self):
+    def test_lan_transfer_requires_token_and_serves_batch_manifest_and_ranges(self):
         async def scenario():
             with tempfile.TemporaryDirectory() as folder_name:
                 folder = Path(folder_name)
@@ -142,37 +151,50 @@ assert module.Plugin
                     return bytes(writer.data)
 
                 try:
-                    path = folder / "clip.mp4"
+                    path = folder / "clip & one.mp4"
+                    second = folder / "clip-two.mp4"
                     path.write_bytes(b"0123456789")
+                    second.write_bytes(b"abcdefghij")
                     plugin.transfer = {
-                        "server": None, "token": "secret", "path": path,
-                        "filename": path.name, "url": "http://127.0.0.1:1234/secret/",
+                        "server": None, "token": "secret",
+                        "files": [
+                            {"id": 0, "path": path, "filename": path.name, "complete": False},
+                            {"id": 1, "path": second, "filename": second.name, "complete": False},
+                        ],
+                        "url": "http://127.0.0.1:1234/secret/",
                         "expires_at": backend.time.time() + 60, "downloads": 0,
-                        "bytes_sent": 0, "state": "ready",
+                        "completed_files": 0, "bytes_sent": 0, "state": "ready",
                     }
-                    denied = await request("/wrong/download")
+                    denied = await request("/wrong/file/0")
                     self.assertIn(b"404 Not Found", denied)
                     landing = await request("/secret/")
-                    self.assertIn(b">Save to Photos</a>", landing)
+                    self.assertIn(b">Save all to Photos</a>", landing)
+                    self.assertIn(b"Help &amp; Settings", landing)
+                    self.assertGreater(landing.index(b">Save all to Photos</a>"), landing.index(b"clip-two.mp4"))
                     self.assertIn(b"shortcuts://run-shortcut?name=DeckClip%20Save%20to%20Photos", landing)
-                    self.assertIn(b"http%3A%2F%2F127.0.0.1%3A1234%2Fsecret%2Fdownload", landing)
+                    self.assertIn(b"http%3A%2F%2F127.0.0.1%3A1234%2Fsecret%2Fmanifest", landing)
+                    self.assertIn(b"clip &amp; one.mp4", landing)
                     self.assertNotIn(b"clipboard", landing.lower())
-                    self.assertIn(b"href='download' download>Download to Files", landing)
-                    inline = await request("/secret/video", "Range: bytes=0-1\r\n")
-                    self.assertIn(b"Content-Disposition: inline", inline)
-                    self.assertTrue(inline.endswith(b"01"))
-                    ranged = await request("/secret/download", "Range: bytes=2-5\r\n")
+                    manifest = await request("/secret/manifest")
+                    self.assertIn(b'"name": "clip & one.mp4"', manifest)
+                    self.assertIn(b'"url": "http://127.0.0.1:1234/secret/file/1"', manifest)
+                    self.assertNotIn(str(folder).encode(), manifest)
+                    ranged = await request("/secret/file/0", "Range: bytes=2-5\r\n")
                     self.assertIn(b"206 Partial Content", ranged)
+                    self.assertIn(b"Content-Disposition: attachment", ranged)
                     self.assertTrue(ranged.endswith(b"2345"))
+                    missing = await request("/secret/file/2")
+                    self.assertIn(b"404 Not Found", missing)
                     public = await plugin.get_transfer_status()
-                    self.assertEqual(2, public["downloads"])
+                    self.assertEqual(2, public["file_count"])
+                    self.assertEqual(0, public["completed_files"])
                 finally:
                     plugin.transfer = None
                     backend.OUTPUT_DIR = previous_output
 
         asyncio.run(scenario())
 
-    def test_completed_full_download_closes_transfer_after_grace_period(self):
+    def test_batch_closes_only_after_every_full_download(self):
         async def scenario():
             with tempfile.TemporaryDirectory() as folder_name:
                 folder = Path(folder_name)
@@ -196,15 +218,29 @@ assert module.Plugin
 
                 try:
                     path = folder / "clip.mp4"
+                    second = folder / "clip-two.mp4"
                     path.write_bytes(b"0123456789")
+                    second.write_bytes(b"abcdefghij")
                     plugin.transfer = {
-                        "server": FakeServer(), "token": "secret", "path": path,
-                        "filename": path.name, "url": "http://127.0.0.1:1234/secret/",
+                        "server": FakeServer(), "token": "secret",
+                        "files": [
+                            {"id": 0, "path": path, "filename": path.name, "complete": False},
+                            {"id": 1, "path": second, "filename": second.name, "complete": False},
+                        ],
+                        "url": "http://127.0.0.1:1234/secret/",
                         "expires_at": backend.time.time() + 60, "downloads": 0,
-                        "bytes_sent": 0, "state": "ready",
+                        "completed_files": 0, "bytes_sent": 0, "state": "ready",
                     }
                     reader = asyncio.StreamReader()
-                    reader.feed_data(b"GET /secret/download HTTP/1.1\r\nHost: test\r\n\r\n")
+                    reader.feed_data(b"GET /secret/file/0 HTTP/1.1\r\nHost: test\r\n\r\n")
+                    reader.feed_eof()
+                    writer = MemoryWriter()
+                    await plugin._handle_transfer_client(reader, writer)
+                    self.assertEqual("downloading", plugin.transfer["state"])
+                    await asyncio.sleep(0.03)
+                    self.assertIsNotNone(plugin.transfer)
+                    reader = asyncio.StreamReader()
+                    reader.feed_data(b"GET /secret/file/1 HTTP/1.1\r\nHost: test\r\n\r\n")
                     reader.feed_eof()
                     writer = MemoryWriter()
                     await plugin._handle_transfer_client(reader, writer)

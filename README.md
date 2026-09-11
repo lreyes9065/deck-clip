@@ -8,9 +8,9 @@ Each selected clip can be renamed before export. The UI reports overall and per-
 
 DeckClip runs without root privileges. Its export manager lists only direct MP4 files in the dedicated output folder and provides a confirmed **Move to Trash** action; it never manages Steam's source recordings.
 
-An exported clip can also be shared directly to a phone. DeckClip starts a temporary local-only web server, displays a QR code, and stops sharing after ten minutes or when the user presses **Stop sharing**. After a complete download it keeps a 30-second retry window, then closes automatically. No LocalSend plugin, cloud account, or internet upload is required.
+One or more exported clips can also be shared directly to a phone through one QR code. DeckClip starts a temporary LAN web server, displays a single QR code for the selected batch, and stops sharing after ten minutes or when the user presses **Stop sharing**. After every selected file has downloaded, it keeps a 30-second retry window and then closes automatically. No LocalSend plugin, cloud account, or internet upload is required.
 
-The phone page includes an optional **Save to Photos** action for an explicitly configured two-action iPhone Shortcut, plus **Download to Files** as the universal fallback. See `docs/iphone-shortcut.md` for setup and security details.
+The phone page includes an optional **Save all to Photos** action for an explicitly configured iPhone Shortcut, plus individual browser downloads as the universal fallback. A cog beside the DeckClip title opens a permanent, full-screen **Help & Settings** page, letting users complete the guided Shortcut setup before starting the ten-minute transfer timer. See `docs/iphone-shortcut.md` for setup and security details.
 
 ## Prototype architecture
 
@@ -18,7 +18,7 @@ The phone page includes an optional **Save to Photos** action for an explicitly 
 - `main.py` is Decky's compatibility entry point and coordinates export jobs. Self-contained services live under `backend/`: `library.py` performs read-only Steam discovery and name resolution, `exports.py` validates output-file access, `media.py` assembles fragmented streams, `qr.py` generates transfer QR matrices, and `transfer.py` owns the temporary token-protected LAN server and its lifecycle.
 - DeckClip explicitly assembles every numbered Steam `.m4s` fragment for each video/audio stream, then FFmpeg remuxes those streams without re-encoding. This avoids FFmpeg stopping after the first three-second DASH fragment. If a clip spans multiple recording sessions, DeckClip concatenates the resulting session parts into one MP4.
 - All intermediate and final writes stay under `/home/deck/Videos/DeckClip/`. The source clip paths are never opened for writing, renamed, or removed.
-- Phone transfer serves one selected export at a time over the Deck's current LAN address. A cryptographically random URL protects the file, the server accepts only that exact URL, and it automatically expires after ten minutes.
+- Phone transfer serves a frozen selection of at most 20 direct exports over the Deck's current LAN address. A cryptographically random session URL protects an opaque manifest and numbered file links; filesystem paths are never exposed. The server accepts only those exact routes and automatically expires after ten minutes.
 
 ## Steam Deck test setup
 
@@ -48,7 +48,7 @@ Do not use GitHub's automatic **Source code** ZIP and do not ZIP the repository 
 pnpm run release
 ```
 
-This builds, tests, and validates `release/DeckClip-0.9.0.zip`. Its relevant layout is:
+This builds, tests, and validates `release/DeckClip-0.11.2.zip`. Its relevant layout is:
 
 ```text
 DeckClip/
@@ -71,10 +71,10 @@ DeckClip/
 
 ### Install through Decky
 
-1. Copy `release/DeckClip-0.9.0.zip` to the Deck's Downloads folder. Do not extract it.
+1. Copy `release/DeckClip-0.11.2.zip` to the Deck's Downloads folder. Do not extract it.
 2. In Gaming Mode, open the Quick Access menu (`…`) and Decky Loader.
 3. Open Decky settings and enable **Developer Mode** if needed.
-4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.9.0.zip` from Downloads.
+4. Open the Developer section, choose **Install Plugin from Zip**, and select `DeckClip-0.11.2.zip` from Downloads.
 5. Wait for Decky to finish installing, then reload Decky or restart Steam if DeckClip does not immediately appear.
 
 Decky owns its installed plugin directory and makes it read-only; that is expected. Install updates by generating and selecting a newer ZIP rather than editing `/home/deck/homebrew/plugins/DeckClip/` directly.
@@ -100,8 +100,8 @@ The command is intentionally limited to DeckClip's output folder. New exports ar
 7. Open each MP4 from Dolphin or a media player and check video, game audio, and any extra audio track you recorded.
 8. Export the same names again and confirm DeckClip creates `name (2).mp4` rather than overwriting the first file.
 9. Open **Manage exported clips**, move one MP4 to Trash, and confirm Steam's original clip remains available.
-10. For another exported clip, choose **Send to phone**. Put the Deck and iPhone on the same trusted Wi-Fi network and scan the QR code. With the documented Shortcut installed, test **Save to Photos**; otherwise verify **Download to Files** still works.
-11. Confirm DeckClip reports the completed download, then press **Stop sharing**. Also confirm an uncompleted share expires after ten minutes.
+10. In **Manage exported clips**, leave the exports unchecked, select several, and choose **Send selected clips**. Put the Deck and iPhone on the same trusted Wi-Fi network and scan the one QR code. With the documented Shortcut installed, test **Save all to Photos**; otherwise verify each individual download link works.
+11. Confirm DeckClip reports progress for the selected batch and does not mark it complete until every clip finishes. Then press **Stop sharing**. Also confirm an uncompleted share expires after ten minutes.
 
 Backend-only discovery tests can be run on any machine with Python 3.9+:
 

@@ -89,8 +89,8 @@ class Plugin:
     def transfer(self, value):
         self.transfers.transfer = value
 
-    async def start_transfer(self, filename: str) -> dict[str, Any]:
-        return await self.transfers.start_transfer(filename)
+    async def start_transfer(self, filenames: list[str] | str) -> dict[str, Any]:
+        return await self.transfers.start_transfer(filenames)
 
     async def get_transfer_status(self) -> dict[str, Any]:
         return await self.transfers.get_transfer_status()

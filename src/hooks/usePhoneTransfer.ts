@@ -4,7 +4,7 @@ import type { TransferStatus } from "../types";
 
 export function usePhoneTransfer(onError: (message: string) => void) {
   const [transfer, setTransfer] = useState<TransferStatus | null>(null);
-  const begin = async (filename: string) => setTransfer(await startTransfer(filename));
+  const begin = async (filenames: string[]) => setTransfer(await startTransfer(filenames));
   const stop = async () => {
     try { await stopTransfer(); }
     finally { setTransfer(null); }

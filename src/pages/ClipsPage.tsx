@@ -1,5 +1,5 @@
 import { ButtonItem, Field, PanelSection, PanelSectionRow, TextField, Toggle } from "@decky/ui";
-import { ALL_CLIPS, UNKNOWN_CLIPS } from "../constants";
+import { UNKNOWN_CLIPS } from "../constants";
 import type { Clip } from "../types";
 import { formatDuration } from "../utils/formatting";
 
@@ -24,7 +24,6 @@ type Props = {
 export function ClipsPage(props: Props) {
   return (
     <PanelSection title={props.activeName}>
-      <PanelSectionRow><ButtonItem layout="below" onClick={props.onBack}>‹ Back to games</ButtonItem></PanelSectionRow>
       <PanelSectionRow>
         <TextField label="Filter by game, date, time, or duration" value={props.query} onChange={(event) => props.onQuery(event.target.value)} />
       </PanelSectionRow>
@@ -32,8 +31,8 @@ export function ClipsPage(props: Props) {
         <PanelSectionRow key={clip.id}>
           <div>
             <Field
-              label={props.activeGroup === ALL_CLIPS || props.activeGroup === UNKNOWN_CLIPS ? clip.game_name : new Date(clip.recorded_at).toLocaleString()}
-              description={props.activeGroup === ALL_CLIPS || props.activeGroup === UNKNOWN_CLIPS
+              label={props.activeGroup === UNKNOWN_CLIPS ? clip.game_name : new Date(clip.recorded_at).toLocaleString()}
+              description={props.activeGroup === UNKNOWN_CLIPS
                 ? `${new Date(clip.recorded_at).toLocaleString()} • ${formatDuration(clip.duration_seconds)}`
                 : formatDuration(clip.duration_seconds)}
               bottomSeparator="none"
@@ -57,6 +56,7 @@ export function ClipsPage(props: Props) {
           {props.exporting ? "Exporting…" : `Export ${props.selectedCount || "selected"} clip${props.selectedCount === 1 ? "" : "s"}`}
         </ButtonItem>
       </PanelSectionRow>
+      <PanelSectionRow><ButtonItem layout="below" onClick={props.onBack}>‹ Back to games</ButtonItem></PanelSectionRow>
     </PanelSection>
   );
 }

@@ -15,7 +15,6 @@ type Props = {
   onFilter: (value: string) => void;
   onManageExports: () => void;
   onOpenGame: (id: string) => void;
-  onRefresh: () => void;
 };
 
 export function LibraryPage(props: Props) {
@@ -43,9 +42,6 @@ export function LibraryPage(props: Props) {
         </PanelSectionRow>
       )}
       {props.message && <PanelSectionRow><div>{props.message}</div></PanelSectionRow>}
-      <PanelSectionRow>
-        <ButtonItem layout="below" disabled={props.disabled} onClick={props.onRefresh}>Refresh library</ButtonItem>
-      </PanelSectionRow>
     </PanelSection>
   );
 }

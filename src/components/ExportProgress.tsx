@@ -13,6 +13,8 @@ export function ExportProgress({ job }: { job: Job }) {
         </PanelSectionRow>
       ))}
       {job.state === "complete" && <PanelSectionRow><div>Clips saved to {job.output_dir}</div></PanelSectionRow>}
+      {job.state === "failed" && <PanelSectionRow><Field focusable label="Export failed"
+        description="Open Settings → Recent statuses for the full error details." /></PanelSectionRow>}
     </PanelSection>
   );
 }

@@ -4,6 +4,7 @@ import asyncio
 import datetime as dt
 import html
 import json
+import os
 import re
 import secrets
 import socket
@@ -13,10 +14,13 @@ from typing import Any, Callable
 from urllib.parse import quote
 
 from .qr import _qr_matrix
+from .exports import open_export, file_identity
 
 TRANSFER_TTL_SECONDS = 10 * 60
 TRANSFER_COMPLETION_GRACE_SECONDS = 30
 MAX_TRANSFER_FILES = 20
+MAX_CLIENTS = 8
+WRITE_TIMEOUT = 15
 
 def _lan_address() -> str:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -38,8 +42,14 @@ class TransferManager:
         self.transfer: dict[str, Any] | None = None
         self.transfer_expiry: asyncio.Task | None = None
         self.transfer_completion: asyncio.Task | None = None
+        self.lock = asyncio.Lock()
+        self.clients = {}
 
     async def start_transfer(self, filenames: list[str] | str) -> dict[str, Any]:
+        async with self.lock:
+            return await self._start_transfer(filenames)
+
+    async def _start_transfer(self, filenames):
         # Accept a string for compatibility with older frontends during upgrades.
         if isinstance(filenames, str):
             filenames = [filenames]
@@ -50,7 +60,12 @@ class TransferManager:
         if any(not isinstance(name, str) for name in filenames) or len(set(filenames)) != len(filenames):
             raise ValueError("The selected exported clips are invalid")
         paths = [await asyncio.to_thread(self._export_path, name) for name in filenames]
-        await self._stop_transfer()
+        files = []
+        for index, path in enumerate(paths):
+            with open_export(path) as stream:
+                files.append({"id": index, "filename": path.name, "complete": False,
+                              "identity": file_identity(os.fstat(stream.fileno()))})
+        await self._stop_locked()
         address = await asyncio.to_thread(_lan_address)
         token = secrets.token_urlsafe(32)
         expires_at = time.time() + TRANSFER_TTL_SECONDS
@@ -70,10 +85,7 @@ class TransferManager:
         self.transfer = {
             "server": server,
             "token": token,
-            "files": [
-                {"id": index, "path": path, "filename": path.name, "complete": False}
-                for index, path in enumerate(paths)
-            ],
+            "files": files,
             "url": url,
             "expires_at": expires_at,
             "downloads": 0,
@@ -85,10 +97,14 @@ class TransferManager:
         return self._transfer_public_status(include_qr=True)
 
     async def get_transfer_status(self) -> dict[str, Any]:
+        async with self.lock:
+            return await self._get_transfer_status()
+
+    async def _get_transfer_status(self):
         if self.transfer is None:
             return {"state": "inactive"}
         if time.time() >= self.transfer["expires_at"]:
-            await self._stop_transfer()
+            await self._stop_locked()
             return {"state": "expired"}
         return self._transfer_public_status(include_qr=False)
 
@@ -116,20 +132,24 @@ class TransferManager:
     async def _expire_transfer(self, token: str):
         try:
             await asyncio.sleep(TRANSFER_TTL_SECONDS)
-            if self.transfer is not None and secrets.compare_digest(self.transfer["token"], token):
-                await self._stop_transfer()
+            await self._stop_transfer(token)
         except asyncio.CancelledError:
             pass
 
     async def _close_after_completion(self, token: str):
         try:
             await asyncio.sleep(TRANSFER_COMPLETION_GRACE_SECONDS)
-            if self.transfer is not None and secrets.compare_digest(self.transfer["token"], token):
-                await self._stop_transfer()
+            await self._stop_transfer(token)
         except asyncio.CancelledError:
             pass
 
-    async def _stop_transfer(self):
+    async def _stop_transfer(self, token=None):
+        async with self.lock:
+            if token is not None and (self.transfer is None or not secrets.compare_digest(self.transfer["token"], token)):
+                return
+            await self._stop_locked()
+
+    async def _stop_locked(self):
         transfer = self.transfer
         self.transfer = None
         expiry = self.transfer_expiry
@@ -146,6 +166,12 @@ class TransferManager:
             server = transfer["server"]
             server.close()
             await server.wait_closed()
+        clients = list(self.clients.items())
+        for task, writer in clients:
+            writer.close()
+            task.cancel()
+        if clients:
+            await asyncio.gather(*(task for task, _ in clients), return_exceptions=True)
 
     async def _send_http(self, writer: asyncio.StreamWriter, status: str, headers: dict[str, str], body: bytes = b""):
         safe_headers = {
@@ -157,9 +183,16 @@ class TransferManager:
         }
         head = f"HTTP/1.1 {status}\r\n" + "".join(f"{key}: {value}\r\n" for key, value in safe_headers.items()) + "\r\n"
         writer.write(head.encode("ascii") + body)
-        await writer.drain()
+        await asyncio.wait_for(writer.drain(), WRITE_TIMEOUT)
 
     async def _handle_transfer_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        if len(self.clients) >= MAX_CLIENTS or self.transfer is None:
+            writer.close()
+            return
+        task = asyncio.current_task()
+        self.clients[task] = writer
+        transfer = self.transfer
+        input_file = None
         try:
             try:
                 request = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
@@ -184,8 +217,7 @@ class TransferManager:
                     return
                 key, value = line.split(":", 1)
                 headers[key.strip().lower()] = value.strip()
-            transfer = self.transfer
-            if transfer is None or time.time() >= transfer["expires_at"]:
+            if self.transfer is not transfer or time.time() >= transfer["expires_at"]:
                 await self._send_http(writer, "410 Gone", {"Content-Length": "0"})
                 return
             base = f"/{transfer['token']}/"
@@ -204,17 +236,17 @@ class TransferManager:
                 count = len(transfer["files"])
                 body = (
                     "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-                    "<title>DeckClip transfer</title><style>"
+                    "<title>ClipPort transfer</title><style>"
                     "body{background:#111;box-sizing:border-box;color:#fff;display:flex;flex-direction:column;font:17px system-ui;margin:0 auto;max-width:760px;min-height:100svh;padding:24px}"
                     "a{color:#70b7ff}a.button{background:#1473e6;border-radius:10px;color:#fff;display:block;font-weight:600;margin:12px 0;padding:14px;text-align:center;text-decoration:none}"
                     "li{align-items:center;display:flex;gap:12px;justify-content:space-between;padding:10px 0}li span{overflow-wrap:anywhere}"
                     "aside{background:#1d1d1d;border-radius:10px;color:#ddd;margin:20px 0;padding:14px}"
-                    "footer{margin-top:auto;padding-top:18px}small{color:#bbb}</style><h1>DeckClip</h1>"
+                    "footer{margin-top:auto;padding-top:18px}small{color:#bbb}</style><h1>ClipPort</h1>"
                     f"<p>{count} selected clip{'s' if count != 1 else ''}</p>"
                     f"<ul>{file_links}</ul>"
-                    "<aside><strong>First time?</strong> Set up the iPhone Shortcut from DeckClip’s "
+                    "<aside><strong>First time?</strong> Set up the iPhone Shortcut from ClipPort’s "
                     "<strong>Help &amp; Settings</strong> screen before starting a transfer.</aside>"
-                    f"<footer><small>This temporary link works only on the same local network.</small>"
+                    f"<footer><small>Use this temporary link on a trusted local network.</small>"
                     f"<a class='button' href='{safe_shortcut_url}'>Save {'all ' if count != 1 else ''}to Photos</a></footer>"
                 ).encode("utf-8")
                 await self._send_http(writer, "200 OK", {
@@ -234,7 +266,7 @@ class TransferManager:
                     "Content-Length": str(len(manifest)),
                 }, b"" if method == "HEAD" else manifest)
                 return
-            file_match = re.fullmatch(re.escape(base) + r"file/(\d+)", target)
+            file_match = re.fullmatch(re.escape(base) + r"file/([0-9]{1,3})", target)
             if file_match is None:
                 await self._send_http(writer, "404 Not Found", {"Content-Length": "0"})
                 return
@@ -247,7 +279,11 @@ class TransferManager:
                 # Revalidate containment and existence for every request. Never trust
                 # a path sent by the browser or retained across filesystem changes.
                 path = await asyncio.to_thread(self._export_path, file_entry["filename"])
-                size = path.stat().st_size
+                input_file = open_export(path)
+                info = os.fstat(input_file.fileno())
+                if file_identity(info) != file_entry["identity"]:
+                    raise ValueError("Shared file changed; start a new transfer")
+                size = info.st_size
             except (OSError, ValueError):
                 await self._send_http(writer, "410 Gone", {"Content-Length": "0"})
                 return
@@ -255,7 +291,7 @@ class TransferManager:
             response_status = "200 OK"
             range_header = headers.get("range")
             if range_header:
-                match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+                match = re.fullmatch(r"bytes=([0-9]{0,20})-([0-9]{0,20})", range_header)
                 if not match or (not match.group(1) and not match.group(2)):
                     await self._send_http(writer, "416 Range Not Satisfiable", {"Content-Range": f"bytes */{size}", "Content-Length": "0"})
                     return
@@ -283,15 +319,17 @@ class TransferManager:
             if method == "HEAD" or not length:
                 return
             sent = 0
-            with path.open("rb") as input_file:
+            with input_file:
                 input_file.seek(start)
                 remaining = length
                 while remaining and self.transfer is transfer and time.time() < transfer["expires_at"]:
-                    chunk = await asyncio.to_thread(input_file.read, min(1024 * 1024, remaining))
+                    # A bounded local read avoids a canceled worker retaining the
+                    # descriptor after session shutdown closes it.
+                    chunk = input_file.read(min(256 * 1024, remaining))
                     if not chunk:
                         break
                     writer.write(chunk)
-                    await writer.drain()
+                    await asyncio.wait_for(writer.drain(), WRITE_TIMEOUT)
                     sent += len(chunk)
                     remaining -= len(chunk)
                     transfer["bytes_sent"] += len(chunk)
@@ -306,13 +344,17 @@ class TransferManager:
                     self.transfer_completion = asyncio.create_task(
                         self._close_after_completion(transfer["token"])
                     )
-        except (ConnectionError, BrokenPipeError):
+        except (ConnectionError, BrokenPipeError, asyncio.TimeoutError):
             pass
         except Exception:
             self._logger.exception("DeckClip transfer request failed")
         finally:
+            if input_file is not None:
+                input_file.close()
             writer.close()
             try:
-                await writer.wait_closed()
-            except ConnectionError:
+                await asyncio.wait_for(writer.wait_closed(), 2)
+            except (ConnectionError, asyncio.TimeoutError):
                 pass
+            finally:
+                self.clients.pop(task, None)

@@ -1,12 +1,13 @@
 {
-  "name": "deckclip",
-  "version": "0.11.2",
-  "description": "Export Steam Game Recording clips from Decky Loader",
+  "name": "decky-clipport",
+  "version": "0.14.0",
+  "description": "Your Steam clips, ready to go. Export full-length clips and scan a QR code to download them to your phone over local Wi-Fi.",
   "type": "module",
   "scripts": {
-    "build": "rollup -c",
+    "build": "node scripts/build.mjs",
     "package:decky": "sh scripts/package-decky.sh",
-    "release": "pnpm run typecheck && pnpm run test:backend && pnpm run build && pnpm run package:decky",
+    "release": "pnpm run typecheck && pnpm run test:frontend && pnpm run test:backend && pnpm run build && pnpm run package:decky",
+    "test:frontend": "node --test tests/navigation.test.mjs",
     "watch": "rollup -c -w",
     "typecheck": "tsc --noEmit",
     "test:backend": "python3 -m unittest discover -s tests -v"

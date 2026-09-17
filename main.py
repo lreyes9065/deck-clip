@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import os
 import shutil
 import sys
 import tempfile
-import time
+import traceback
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,17 +21,15 @@ if str(PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(PLUGIN_DIR))
 
 from backend.exports import export_path, list_exports, safe_output_name as _safe_output_name
-from backend.library import (
-    APPINFO_V41_MAGIC,
-    _app_names,
-    _appinfo_names_from_data,
-    _discover,
-    _duration_from_mpd,
-    _shortcut_names,
-)
-from backend.media import join_fragments as _join_fragments, stream_files as _stream_files
-from backend.qr import _qr_matrix
-from backend.transfer import TransferManager, _lan_address
+from backend.library import _discover, _duration_from_mpd
+from backend.media import stream_files as _stream_files
+from backend.transfer import TransferManager
+from backend.exports import delete_exports
+from backend.thumbnails import Thumbnails
+from backend.processes import run_ffmpeg
+from backend.media import assemble_fragments
+from backend.exports import publish_export
+from backend.history import load_history, save_history
 
 
 OUTPUT_DIR = Path("/home/deck/Videos/DeckClip")
@@ -47,13 +45,25 @@ def _list_exports() -> list[dict[str, Any]]:
 
 class Plugin:
     async def _main(self):
-        self.jobs: dict[str, dict[str, Any]] = {}
+        self.operation_lock = asyncio.Lock()
+        self.closing = False
+        history_dir = getattr(decky, "DECKY_PLUGIN_LOG_DIR", None)
+        self.history_dir = Path(history_dir) if history_dir else None
+        self.jobs: dict[str, dict[str, Any]] = load_history(self.history_dir)
+        # Decky may key persistent directories by the new manifest name. Read
+        # the former plugin's bounded status file without changing old data.
+        if not self.jobs and self.history_dir is not None and self.history_dir.name == "Decky ClipPort":
+            self.jobs = load_history(self.history_dir.parent / "DeckClip")
         self.tasks: set[asyncio.Task] = set()
         self.transfers = TransferManager(_export_path, decky.logger)
+        self.thumbnails = Thumbnails(_export_path)
         decky.logger.info("DeckClip loaded")
 
     async def _unload(self):
-        await self.transfers._stop_transfer()
+        self.closing = True
+        async with self.operation_lock:
+            await self.transfers._stop_transfer()
+        await self.thumbnails.close()
         for task in self.tasks:
             task.cancel()
         if self.tasks:
@@ -65,32 +75,29 @@ class Plugin:
     async def list_exports(self) -> list[dict[str, Any]]:
         return await asyncio.to_thread(_list_exports)
 
-    async def trash_export(self, filename: str) -> dict[str, str]:
-        path = await asyncio.to_thread(_export_path, filename)
-        gio = shutil.which("gio")
-        if gio is None:
-            raise RuntimeError("The system Trash service is unavailable. Delete this file in Desktop Mode.")
-        process = await asyncio.create_subprocess_exec(
-            gio, "trash", "--", str(path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await process.communicate()
-        if process.returncode != 0:
-            detail = stderr.decode(errors="replace").strip()
-            raise RuntimeError(detail or "Could not move the export to Trash")
-        return {"filename": filename}
+    async def delete_exports(self, filenames: list[str]):
+        async with self.operation_lock:
+            if self.closing:
+                raise ValueError("DeckClip is shutting down")
+            return await self._delete_exports(filenames)
 
-    @property
-    def transfer(self):
-        return self.transfers.transfer
+    async def _delete_exports(self, filenames):
+        if any(job["state"] in ("queued", "running") for job in self.jobs.values()):
+            raise ValueError("Wait for the current export to finish")
+        if self.transfers.transfer is not None:
+            raise ValueError("Stop sharing before deleting exports")
+        result = await asyncio.to_thread(delete_exports, OUTPUT_DIR, filenames)
+        self.thumbnails.cache.clear()
+        return result
 
-    @transfer.setter
-    def transfer(self, value):
-        self.transfers.transfer = value
+    async def get_export_thumbnail(self, filename: str):
+        return await self.thumbnails.get(filename)
 
     async def start_transfer(self, filenames: list[str] | str) -> dict[str, Any]:
-        return await self.transfers.start_transfer(filenames)
+        async with self.operation_lock:
+            if self.closing:
+                raise ValueError("DeckClip is shutting down")
+            return await self.transfers.start_transfer(filenames)
 
     async def get_transfer_status(self) -> dict[str, Any]:
         return await self.transfers.get_transfer_status()
@@ -98,10 +105,27 @@ class Plugin:
     async def stop_transfer(self) -> dict[str, str]:
         return await self.transfers.stop_transfer()
 
-    async def _handle_transfer_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        return await self.transfers._handle_transfer_client(reader, writer)
-
     async def start_export(self, items: list[dict[str, str]]) -> dict[str, str]:
+        async with self.operation_lock:
+            if self.closing:
+                raise ValueError("DeckClip is shutting down")
+            if any(job["state"] in ("queued", "running") for job in self.jobs.values()):
+                raise ValueError("Wait for the current export to finish")
+            return await self._start_export(items)
+
+    async def _start_export(self, items):
+        if not isinstance(items, list) or not 1 <= len(items) <= 100:
+            raise ValueError("Select between 1 and 100 clips")
+        seen = set()
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                raise ValueError("Invalid clip selection")
+            if item["id"] in seen:
+                raise ValueError("A clip was selected more than once")
+            seen.add(item["id"])
+            name = item.get("name")
+            if name is not None and (not isinstance(name, str) or len(name) > 512):
+                raise ValueError("Invalid export name (maximum 512 characters)")
         available = {clip["id"]: clip for clip in await self.list_clips()}
         if not items:
             raise ValueError("Select at least one clip")
@@ -112,10 +136,15 @@ class Plugin:
                 raise ValueError("A selected clip is no longer available")
             requested.append((clip, item.get("name")))
         job_id = uuid.uuid4().hex
+        # Keep bounded job state, allowing recent frontend polling to finish.
+        while len(self.jobs) >= 20:
+            self.jobs.pop(next(iter(self.jobs)))
         self.jobs[job_id] = {
+            "started_at": datetime.now(timezone.utc).isoformat(),
             "state": "queued", "progress": 0.0, "output_dir": str(OUTPUT_DIR),
             "clips": [{"id": clip["id"], "display_name": clip["game_name"], "progress": 0.0, "state": "queued"} for clip, _ in requested],
         }
+        self._save_history()
         task = asyncio.create_task(self._run_export(job_id, requested))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
@@ -125,6 +154,19 @@ class Plugin:
         if job_id not in self.jobs:
             raise ValueError("Unknown export job")
         return copy.deepcopy(self.jobs[job_id])
+
+    async def get_recent_statuses(self) -> list[dict[str, Any]]:
+        # No transfer URLs/tokens or source contents are retained.
+        return [dict(copy.deepcopy(job), id=job_id)
+                for job_id, job in list(self.jobs.items())[-5:][::-1]]
+
+    def _save_history(self):
+        try:
+            save_history(getattr(self, "history_dir", None), self.jobs)
+        except (OSError, ValueError):
+            # Diagnostics storage failure must not turn a successful export into
+            # a failed one (especially when the disk is full).
+            decky.logger.exception("Could not persist DeckClip status history")
 
     async def _run_export(self, job_id: str, requested: list[tuple[dict[str, Any], str | None]]):
         job = self.jobs[job_id]
@@ -139,29 +181,44 @@ class Plugin:
             job["state"] = "complete"
         except asyncio.CancelledError:
             job["state"] = "cancelled"
+            job["error"] = "Export cancelled while the plugin was unloading."
+            for item in job["clips"]:
+                if item["state"] in ("queued", "exporting"):
+                    item["state"] = "cancelled"
             raise
         except Exception as error:
             decky.logger.exception("DeckClip export failed")
             job["state"] = "failed"
-            job["error"] = str(error)
+            job["error"] = str(error) or type(error).__name__
+            job["details"] = traceback.format_exc()
+            for item in job["clips"]:
+                if item["state"] == "exporting":
+                    item.update(state="failed", error=job["error"])
+                elif item["state"] == "queued":
+                    item["state"] = "not started"
+            try:
+                job["free_bytes"] = shutil.disk_usage(OUTPUT_DIR).free
+            except OSError:
+                pass
+        finally:
+            job["finished_at"] = datetime.now(timezone.utc).isoformat()
+            self._save_history()
 
     async def _export_one(self, job: dict[str, Any], index: int, clip: dict[str, Any], rename: str | None):
         item = job["clips"][index]
         item["state"] = "exporting"
+        item["stage"] = "Finding recording sessions"
         sessions = sorted(Path(clip["id"]).glob("video/**/session.mpd"), key=lambda p: p.stat().st_mtime)
         if not sessions:
             raise RuntimeError(f"No session manifest found for {clip['game_name']}")
         output = OUTPUT_DIR / _safe_output_name(rename, clip)
-        counter = 2
-        while output.exists():
-            output = output.with_name(f"{output.stem} ({counter}).mp4")
-            counter += 1
-        # Keep temporary output beside the destination so the final atomic rename
-        # cannot cross filesystems. Source recording directories are never written.
+        # Keep staging beside output for atomic, no-overwrite hard-link publication.
+        # Source recording directories are never written.
         with tempfile.TemporaryDirectory(prefix=".deckclip-", dir=OUTPUT_DIR) as temp_name:
             temp = Path(temp_name)
             parts = []
             for session_index, session in enumerate(sessions):
+                item["stage"] = f"Assembling/remuxing session {session_index + 1} of {len(sessions)}"
                 part = temp / f"part-{session_index:03d}.mp4"
                 await self._remux_session(
                     session,
@@ -169,22 +226,29 @@ class Plugin:
                     lambda percent, base=session_index: self._set_progress(
                         job, index, (base + percent / 100) / len(sessions) * 90
                     ),
+                    lambda stage, number=session_index + 1: item.update(
+                        stage=f"Session {number}/{len(sessions)}: {stage}"),
                 )
                 parts.append(part)
             if len(parts) == 1:
-                os.replace(parts[0], output)
+                item["stage"] = "Saving MP4"
+                staged = parts[0]
             else:
+                item["stage"] = "Combining recording sessions"
                 concat = temp / "concat.txt"
                 concat.write_text("".join(f"file '{part.as_posix()}'\n" for part in parts))
-                await self._run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-map", "0", "-c", "copy", "-movflags", "+faststart", str(output)])
-        item.update({"progress": 100.0, "state": "complete", "output": str(output)})
+                staged = temp / "complete.mp4"
+                await self._run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-protocol_whitelist", "file,pipe", "-i", str(concat), "-map", "0", "-c", "copy", "-movflags", "+faststart", str(staged)])
+            output = publish_export(staged, output)
+        item.update({"progress": 100.0, "state": "complete", "stage": "Saved", "output": str(output)})
         job["progress"] = sum(entry["progress"] for entry in job["clips"]) / len(job["clips"])
 
     def _set_progress(self, job: dict[str, Any], index: int, value: float):
         job["clips"][index]["progress"] = min(99.0, value)
         job["progress"] = sum(entry["progress"] for entry in job["clips"]) / len(job["clips"])
 
-    async def _remux_session(self, manifest: Path, output: Path, progress):
+    async def _remux_session(self, manifest: Path, output: Path, progress, stage=lambda value: None):
+        stage("Reading fragment list")
         streams = _stream_files(manifest.parent)
         if not streams or streams[0][0] != 0:
             raise RuntimeError(f"No complete video fragment stream found beside {manifest.name}")
@@ -200,13 +264,14 @@ class Plugin:
 
         assembled: list[Path] = []
         for stream_id, files in streams:
+            stage(f"Assembling stream {stream_id} ({len(files)} fragments)")
             stream_file = output.parent / f"{output.stem}-stream{stream_id}.mp4"
-            await asyncio.to_thread(_join_fragments, files, stream_file, on_bytes)
+            await assemble_fragments(files, stream_file, on_bytes)
             assembled.append(stream_file)
 
-        command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+        command = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y"]
         for stream_file in assembled:
-            command.extend(["-i", str(stream_file)])
+            command.extend(["-protocol_whitelist", "file,pipe", "-i", str(stream_file)])
         command.extend(["-map", "0:v:0"])
         for input_index in range(1, len(assembled)):
             command.extend(["-map", f"{input_index}:a:0?"])
@@ -215,22 +280,16 @@ class Plugin:
         ])
 
         duration = _duration_from_mpd(manifest) or 0
-        process = await asyncio.create_subprocess_exec(
-            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        assert process.stdout is not None
-        async for raw in process.stdout:
-            line = raw.decode(errors="replace").strip()
+        stage("Remuxing with FFmpeg")
+        def report(line):
             if line.startswith("out_time_ms=") and duration:
-                media_percent = int(line.split("=", 1)[1]) / 1_000_000 / duration * 100
-                progress(70.0 + min(100.0, media_percent) * 0.3)
-        stderr = (await process.stderr.read()).decode(errors="replace") if process.stderr else ""
-        if await process.wait() != 0:
-            raise RuntimeError(stderr.strip() or f"FFmpeg could not remux {manifest.parent.name}")
+                try:
+                    media_percent = int(line.split("=", 1)[1]) / 1_000_000 / duration * 100
+                    progress(70.0 + min(100.0, media_percent) * 0.3)
+                except ValueError:
+                    pass
+        await run_ffmpeg(command, report)
         progress(100.0)
 
     async def _run(self, command: list[str]):
-        process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        _, stderr = await process.communicate()
-        if process.returncode != 0:
-            raise RuntimeError(stderr.decode(errors="replace").strip() or "FFmpeg concat failed")
+        await run_ffmpeg(command)

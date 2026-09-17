@@ -1,10 +1,10 @@
 {
-  "name": "DeckClip",
-  "author": "DeckClip contributors",
+  "name": "Decky ClipPort",
+  "author": "ClipPort contributors",
   "flags": ["debug"],
   "api_version": 1,
   "publish": {
     "tags": ["video", "recording", "utility"],
-    "description": "Export Steam Game Recording clips and send them to a phone over your local network."
+    "description": "Your Steam clips, ready to go. Export full-length clips and scan a QR code to download them to your phone over local Wi-Fi."
   }
 }

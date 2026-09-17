@@ -1,6 +1,8 @@
 """Fragmented MP4 assembly helpers that never modify Steam source files."""
 
 import re
+import asyncio
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -28,11 +30,28 @@ def stream_files(session_dir: Path) -> list[tuple[int, list[Path]]]:
     return streams
 
 
-def join_fragments(files: list[Path], destination: Path, on_bytes: Callable[[int], None]) -> None:
+def join_fragments(files: list[Path], destination: Path, on_bytes: Callable[[int], None], stop=None) -> None:
     """Join fMP4 fragments into a temporary stream without changing source files."""
     with destination.open("xb") as output:
         for source in files:
             with source.open("rb") as input_file:
                 while block := input_file.read(1024 * 1024):
+                    if stop is not None and stop.is_set():
+                        return
                     output.write(block)
                     on_bytes(len(block))
+
+
+async def assemble_fragments(files, destination, on_bytes):
+    """Join off-loop, but await worker exit before staging can be removed."""
+    stop = threading.Event()
+    loop = asyncio.get_running_loop()
+    def report(count):
+        if not stop.is_set():
+            loop.call_soon_threadsafe(on_bytes, count)
+    worker = asyncio.create_task(asyncio.to_thread(join_fragments, files, destination, report, stop))
+    try:
+        await asyncio.shield(worker)
+    finally:
+        stop.set()
+        await worker

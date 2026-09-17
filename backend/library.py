@@ -41,7 +41,8 @@ def _duration_from_mpd(path: Path) -> float | None:
     try:
         # The MPD duration is an attribute on the opening element. Reading only
         # the header is quicker than parsing a manifest containing many segments.
-        header = path.read_text(errors="replace")[:65536]
+        with path.open(errors="replace") as stream:
+            header = stream.read(65536)
         attribute = re.search(r'\bmediaPresentationDuration\s*=\s*["\']([^"\']+)["\']', header)
         if not attribute:
             return None

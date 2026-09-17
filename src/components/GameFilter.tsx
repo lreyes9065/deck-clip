@@ -16,7 +16,7 @@ export function GameFilter({ options, value, onChange, onClear }: Props) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <Dropdown
             key={value ?? "no-game-filter"}
-            menuLabel="DeckClip games"
+            menuLabel="ClipPort games"
             rgOptions={options}
             selectedOption={value}
             strDefaultLabel="Select a game"

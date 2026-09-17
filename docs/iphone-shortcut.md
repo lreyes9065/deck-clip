@@ -28,7 +28,7 @@ If the Shortcut is not installed or fails, use the individual download links on 
 
 - The Shortcut receives only the current temporary manifest URL as text input.
 - It does not use the clipboard, store a Deck address, or keep a pairing secret.
-- The URL contains a random bearer token, expires after ten minutes, and the server closes 30 seconds after a complete download.
+- The URL contains a random bearer token, expires after ten minutes, and the server closes 30 seconds after every selected file has completed a full download. A completed HTTP download does not prove Photos saved it.
 - The transfer uses unencrypted local HTTP. Use it only on a trusted private network.
 - Anyone who can read the temporary URL while it is active can retrieve every clip in that batch. Do not share screenshots of the QR code.
 - iOS controls network and Photos permission. Access can be reviewed or revoked in the Shortcut's privacy settings.

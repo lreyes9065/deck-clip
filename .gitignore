@@ -1,6 +1,7 @@
 node_modules/
 dist/
 release/
+.deckclip-build-*/
 .DS_Store
 *.pyc
 __pycache__/

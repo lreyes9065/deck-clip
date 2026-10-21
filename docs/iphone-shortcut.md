@@ -1,25 +1,25 @@
-# DeckClip Save to Photos shortcut
+# ClipPort Save to Photos shortcut
 
-DeckClip can pass one temporary manifest URL to an iPhone Shortcut. The manifest contains the selected clip names and their temporary download URLs; it never contains filesystem paths. The URL is never copied to the clipboard or saved by DeckClip.
+ClipPort can pass one temporary manifest URL to an iPhone Shortcut. The manifest contains the selected clip names and their temporary download URLs; it never contains filesystem paths. The URL is never copied to the clipboard or saved by ClipPort.
 
 ## Create the shortcut
 
-Open DeckClip's permanent **Help & Settings** screen before starting a transfer. The same instructions are included there, so the ten-minute transfer timer does not run while the Shortcut is being created.
+Open ClipPort's permanent **Help & Settings** screen before starting a transfer. The same instructions are included there, so the ten-minute transfer timer does not run while the Shortcut is being created.
 
-1. Open **Shortcuts** on the iPhone, tap **+**, and rename the new shortcut exactly **DeckClip Save to Photos**.
+1. Open **Shortcuts** on the iPhone, tap **+**, and rename the new shortcut exactly **ClipPort Save to Photos**.
 2. Search for and add **Get Contents of URL**. Tap its URL field, choose **Select Variable**, and select **Shortcut Input**.
 3. Add **Get Dictionary Value**. Enter `files` as the key. It should read “Get Value for files in Contents of URL.”
 4. Add **Repeat with Each**. It should use **Dictionary Value** from the preceding action.
 5. Inside the Repeat section, add **Get Dictionary Value**. Enter `url` as the key and select **Repeat Item** as its input.
 6. Still inside Repeat, add **Get Contents of URL**. It should use the preceding **Dictionary Value**.
 7. Still inside Repeat, add **Save to Photo Album**. It must use the immediately preceding **Contents of URL**, not Shortcut Input.
-8. Confirm those final three actions appear above **End Repeat**. Run the shortcut from DeckClip so iOS can request local-network and Photos permission.
+8. Confirm those final three actions appear above **End Repeat**. Run the shortcut from ClipPort so iOS can request local-network and Photos permission.
 
 ## Use it
 
 1. Open **Manage exported clips**, select up to 20 clips, and choose **Send selected clips**.
 2. Scan the QR code on the iPhone.
-3. Tap **Save all to Photos** on the temporary DeckClip page.
+3. Tap **Save all to Photos** on the temporary ClipPort page.
 4. Shortcuts downloads each selected clip and saves it to Photos.
 
 If the Shortcut is not installed or fails, use the individual download links on the same page.

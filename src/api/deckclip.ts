@@ -8,6 +8,7 @@ export const getRecentStatuses = callable<[], RecentStatus[]>("get_recent_status
 export const listExports = callable<[], ExportedFile[]>("list_exports");
 export const deleteExports = callable<[filenames: string[]], { deleted: string[]; failed: string[] }>("delete_exports");
 export const getExportThumbnail = callable<[filename: string], string | null>("get_export_thumbnail");
+export const getClipThumbnail = callable<[clipId: string], string | null>("get_clip_thumbnail");
 export const startTransfer = callable<[filenames: string[]], TransferStatus>("start_transfer");
 export const getTransferStatus = callable<[], TransferStatus>("get_transfer_status");
 export const stopTransfer = callable<[], { state: string }>("stop_transfer");

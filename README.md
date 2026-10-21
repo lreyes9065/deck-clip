@@ -2,29 +2,29 @@
 
 Your Steam clips, ready to go. Export full-length clips and scan a QR code to download them to your phone over local Wi-Fi.
 
-Formerly DeckClip. Version 0.14.0 changes the displayed name to Decky ClipPort (ClipPort in the panel). For compatibility, exports remain in `/home/deck/Videos/DeckClip/`, the installed ZIP folder remains `DeckClip/`, and the iPhone Shortcut must still be named **DeckClip Save to Photos**. Internal routes and saved game filters retain their existing keys. No videos are moved or deleted by the rename. Older development notes below retain the former name.
+Formerly DeckClip. The plugin is now Decky ClipPort (ClipPort in the panel). Starting with 0.15.1, rename your existing iPhone Shortcut to **ClipPort Save to Photos**; its actions are unchanged. For storage compatibility, exports remain in `/home/deck/Videos/DeckClip/` and the installed ZIP folder remains `DeckClip/`. Internal routes, saved game filters, and legacy-history lookup retain their existing keys. No videos are moved or deleted. Historical review documents and old release archives retain their original names.
 
 The export-manager page now survives panel remounts during deletion confirmation and refreshes after deletion, including when the final export is removed. Return to the library using Back to games.
 
-DeckClip is a barebones Decky Loader plugin with a searchable game and clip browser that exports any selection of Steam Game Recording clips to normal MP4 files in:
+ClipPort is a barebones Decky Loader plugin with a searchable game and clip browser that exports any selection of Steam Game Recording clips to normal MP4 files in:
 
 `/home/deck/Videos/DeckClip/`
 
 Each selected clip can be renamed before export. The UI reports overall and per-clip progress, then shows the destination folder. Existing files are never overwritten, and Steam's recording folders are only read.
 
-DeckClip runs without root privileges. Its export manager lists only direct MP4 files in the dedicated output folder and offers confirmed permanent deletion, individually or for selected exports. Steam source recordings are never deleted. Existing system Trash contents are left alone.
+ClipPort runs without root privileges. Its export manager lists only direct MP4 files in the dedicated output folder and offers confirmed permanent deletion, individually or for selected exports. Steam source recordings are never deleted. Existing system Trash contents are left alone.
 
-Exported videos have small static previews generated lazily by FFmpeg. Up to 100 previews are cached in memory; no thumbnail files accumulate on disk. Unsupported videos display a placeholder. Source-recording previews are not included yet.
+Source recordings and exported videos have small static previews generated lazily by FFmpeg. Up to 100 previews share an in-memory cache and a single generation queue. Source previews use the initialization fragment and up to three initial video chunks, capped at 16 MB, in an automatically removed temporary file outside Steam's folders. No source files are modified and no preview images accumulate on disk. Unsupported, oversized, or unavailable recordings display a placeholder; browsing and exporting remain available. The preview is an early frame, not a precise trimmed-clip poster image.
 
-One or more exported clips can also be shared directly to a phone through one QR code. DeckClip starts a temporary LAN web server, displays a single QR code for the selected batch, and stops sharing after ten minutes or when the user presses **Stop sharing**. After every selected file has downloaded, it keeps a 30-second retry window and then closes automatically. No LocalSend plugin, cloud account, or internet upload is required.
+One or more exported clips can also be shared directly to a phone through one QR code. ClipPort starts a temporary LAN web server, displays a single QR code for the selected batch, and stops sharing after ten minutes or when the user presses **Stop sharing**. After every selected file has downloaded, it keeps a 30-second retry window and then closes automatically. No LocalSend plugin, cloud account, or internet upload is required.
 
-The phone page includes an optional **Save all to Photos** action for an explicitly configured iPhone Shortcut, plus individual browser downloads as the universal fallback. A cog beside the DeckClip title opens a permanent, full-screen **Help & Settings** page, letting users complete the guided Shortcut setup before starting the ten-minute transfer timer. See `docs/iphone-shortcut.md` for setup and security details.
+The phone page includes an optional **Save all to Photos** action for an explicitly configured iPhone Shortcut, plus individual browser downloads as the universal fallback. A cog beside the ClipPort title opens a permanent, full-screen **Help & Settings** page, letting users complete the guided Shortcut setup before starting the ten-minute transfer timer. See `docs/iphone-shortcut.md` for setup and security details.
 
 ## Architecture
 
 - `src/index.tsx` is the small Decky entry point and screen coordinator. `src/pages/` contains the library, clip browser, and export manager screens; `src/components/` contains reusable UI; `src/hooks/` owns export and transfer polling; and typed backend calls, models, persistence, and formatting live under `src/api/`, `src/types/`, and `src/utils/`.
 - `main.py` is Decky's entry point and coordinates export jobs. Services under `backend/` handle library discovery, safe export-file access/publication, fragment assembly, QR/LAN transfers, thumbnails, subprocess lifetimes, and persistent status history. `process_env.py` isolates system FFmpeg from Decky's bundled library environment.
-- DeckClip explicitly assembles every numbered Steam `.m4s` fragment for each video/audio stream, then FFmpeg remuxes those streams without re-encoding. This avoids FFmpeg stopping after the first three-second DASH fragment. If a clip spans multiple recording sessions, DeckClip concatenates the resulting session parts into one MP4.
+- ClipPort explicitly assembles every numbered Steam `.m4s` fragment for each video/audio stream, then FFmpeg remuxes those streams without re-encoding. This avoids FFmpeg stopping after the first three-second DASH fragment. If a clip spans multiple recording sessions, ClipPort concatenates the resulting session parts into one MP4.
 - All intermediate and final video writes stay under `/home/deck/Videos/DeckClip/`. Completed output is published atomically without replacing existing names. The latest five export statuses are stored separately in Decky's plugin log directory as a private `recent-exports.json` file. Source clip paths are never opened for writing, renamed, or removed.
 - Phone transfer serves at most 20 direct exports. Opened file identities must match the selected files; replacements are rejected. A random session URL protects the manifest and numbered file links. The server has an eight-client limit, write timeouts, and closes accepted connections when stopped or expired. It binds all IPv4 interfaces: reachability depends on routing, VPNs, and firewalls, not just Wi-Fi membership.
 
@@ -58,7 +58,7 @@ Do not use GitHub's automatic **Source code** ZIP and do not ZIP the repository 
 pnpm run release
 ```
 
-This builds, tests, and validates `release/Decky-ClipPort-0.14.0.zip`. Its relevant layout is:
+This builds, tests, and validates `release/Decky-ClipPort-0.15.1.zip`. Its relevant layout is:
 
 ```text
 DeckClip/
@@ -85,11 +85,11 @@ DeckClip/
 
 ### Install through Decky
 
-1. Copy `release/Decky-ClipPort-0.14.0.zip` to the Deck's Downloads folder. Do not extract it.
+1. Copy `release/Decky-ClipPort-0.15.1.zip` to the Deck's Downloads folder. Do not extract it.
 2. In Gaming Mode, open the Quick Access menu (`…`) and Decky Loader.
 3. Open Decky settings and enable **Developer Mode** if needed.
-4. Open the Developer section, choose **Install Plugin from Zip**, and select `Decky-ClipPort-0.14.0.zip` from Downloads.
-5. Wait for Decky to finish installing, then reload Decky or restart Steam if DeckClip does not immediately appear.
+4. Open the Developer section, choose **Install Plugin from Zip**, and select `Decky-ClipPort-0.15.1.zip` from Downloads.
+5. Wait for Decky to finish installing, then reload Decky or restart Steam if ClipPort does not immediately appear.
 
 Decky owns its installed plugin directory and makes it read-only; that is expected. Install updates by generating and selecting a newer ZIP rather than editing `/home/deck/homebrew/plugins/DeckClip/` directly.
 
@@ -101,7 +101,7 @@ Earlier prototypes ran their backend as root and may have created a root-owned o
 sudo chown -R deck:deck /home/deck/Videos/DeckClip
 ```
 
-The command is intentionally limited to DeckClip's output folder. New exports are created as the normal `deck` user.
+The command is intentionally limited to ClipPort's output folder. New exports are created as the normal `deck` user.
 
 ### Test checklist
 
@@ -112,10 +112,10 @@ The command is intentionally limited to DeckClip's output folder. New exports ar
 5. Start export and watch both overall and per-clip progress.
 6. Confirm the completion message points to `/home/deck/Videos/DeckClip/`.
 7. Open each MP4 from Dolphin or a media player and check video, game audio, and any extra audio track you recorded.
-8. Export the same names again and confirm DeckClip creates `name (2).mp4` rather than overwriting the first file.
+8. Export the same names again and confirm ClipPort creates `name (2).mp4` rather than overwriting the first file.
 9. Open **Manage exported clips**, check previews, then select expendable test exports. Cancel deletion first and verify they remain. Confirm permanent deletion and verify only those exports disappear; Steam originals must remain untouched.
 10. In **Manage exported clips**, leave the exports unchecked, select several, and choose **Send selected clips**. Put the Deck and iPhone on the same trusted Wi-Fi network and scan the one QR code. With the documented Shortcut installed, test **Save all to Photos**; otherwise verify each individual download link works.
-11. Confirm DeckClip reports progress for the selected batch and does not mark it complete until every clip finishes. Then press **Stop sharing**. Also confirm an uncompleted share expires after ten minutes.
+11. Confirm ClipPort reports progress for the selected batch and does not mark it complete until every clip finishes. Then press **Stop sharing**. Also confirm an uncompleted share expires after ten minutes.
 
 Backend tests target POSIX systems with Python 3.10+. Media integration tests also require FFmpeg:
 

@@ -1,4 +1,4 @@
-# DeckClip 0.13.0: release-hardening checklist
+# ClipPort: release-hardening checklist (introduced in 0.13.0)
 
 This is a pre-1.0 test build. Use expendable exported copies for destructive tests; never remove Steam source recordings as part of this checklist.
 

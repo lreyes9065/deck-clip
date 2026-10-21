@@ -2,6 +2,7 @@ import { ButtonItem, Field, PanelSection, PanelSectionRow, TextField, Toggle } f
 import { UNKNOWN_CLIPS } from "../constants";
 import type { Clip } from "../types";
 import { formatDuration } from "../utils/formatting";
+import { ExportThumbnail } from "../components/ExportThumbnail";
 
 type Props = {
   activeGroup: string;
@@ -31,6 +32,7 @@ export function ClipsPage(props: Props) {
         <PanelSectionRow key={clip.id}>
           <div>
             <Field
+              icon={<ExportThumbnail filename={clip.id} modified={clip.recorded_at} source />}
               label={props.activeGroup === UNKNOWN_CLIPS ? clip.game_name : new Date(clip.recorded_at).toLocaleString()}
               description={props.activeGroup === UNKNOWN_CLIPS
                 ? `${new Date(clip.recorded_at).toLocaleString()} • ${formatDuration(clip.duration_seconds)}`

@@ -1,1 +1,1 @@
-"""DeckClip backend implementation modules."""
+"""ClipPort backend implementation modules."""

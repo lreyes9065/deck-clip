@@ -224,7 +224,7 @@ class TransferManager:
             if target == base:
                 manifest_url = transfer["url"] + "manifest"
                 shortcut_url = (
-                    "shortcuts://run-shortcut?name=DeckClip%20Save%20to%20Photos"
+                    "shortcuts://run-shortcut?name=ClipPort%20Save%20to%20Photos"
                     f"&input=text&text={quote(manifest_url, safe='')}"
                 )
                 safe_shortcut_url = html.escape(shortcut_url, quote=True)
@@ -347,7 +347,7 @@ class TransferManager:
         except (ConnectionError, BrokenPipeError, asyncio.TimeoutError):
             pass
         except Exception:
-            self._logger.exception("DeckClip transfer request failed")
+            self._logger.exception("ClipPort transfer request failed")
         finally:
             if input_file is not None:
                 input_file.close()

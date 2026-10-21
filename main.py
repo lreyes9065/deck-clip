@@ -57,7 +57,8 @@ class Plugin:
         self.tasks: set[asyncio.Task] = set()
         self.transfers = TransferManager(_export_path, decky.logger)
         self.thumbnails = Thumbnails(_export_path)
-        decky.logger.info("DeckClip loaded")
+        self.preview_clips = set()
+        decky.logger.info("ClipPort loaded")
 
     async def _unload(self):
         self.closing = True
@@ -70,7 +71,15 @@ class Plugin:
             await asyncio.gather(*self.tasks, return_exceptions=True)
 
     async def list_clips(self) -> list[dict[str, Any]]:
-        return await asyncio.to_thread(_discover)
+        clips = await asyncio.to_thread(_discover)
+        self.preview_clips = {clip["id"] for clip in clips}
+        return clips
+
+    async def get_clip_thumbnail(self, clip_id: str):
+        # Accept only IDs issued by the current library scan, never arbitrary paths.
+        if not isinstance(clip_id, str) or clip_id not in self.preview_clips:
+            raise ValueError("Clip is not in the current library")
+        return await self.thumbnails.get(clip_id, source_path=Path(clip_id))
 
     async def list_exports(self) -> list[dict[str, Any]]:
         return await asyncio.to_thread(_list_exports)
@@ -78,7 +87,7 @@ class Plugin:
     async def delete_exports(self, filenames: list[str]):
         async with self.operation_lock:
             if self.closing:
-                raise ValueError("DeckClip is shutting down")
+                raise ValueError("ClipPort is shutting down")
             return await self._delete_exports(filenames)
 
     async def _delete_exports(self, filenames):
@@ -96,7 +105,7 @@ class Plugin:
     async def start_transfer(self, filenames: list[str] | str) -> dict[str, Any]:
         async with self.operation_lock:
             if self.closing:
-                raise ValueError("DeckClip is shutting down")
+                raise ValueError("ClipPort is shutting down")
             return await self.transfers.start_transfer(filenames)
 
     async def get_transfer_status(self) -> dict[str, Any]:
@@ -108,7 +117,7 @@ class Plugin:
     async def start_export(self, items: list[dict[str, str]]) -> dict[str, str]:
         async with self.operation_lock:
             if self.closing:
-                raise ValueError("DeckClip is shutting down")
+                raise ValueError("ClipPort is shutting down")
             if any(job["state"] in ("queued", "running") for job in self.jobs.values()):
                 raise ValueError("Wait for the current export to finish")
             return await self._start_export(items)
@@ -166,7 +175,7 @@ class Plugin:
         except (OSError, ValueError):
             # Diagnostics storage failure must not turn a successful export into
             # a failed one (especially when the disk is full).
-            decky.logger.exception("Could not persist DeckClip status history")
+            decky.logger.exception("Could not persist ClipPort status history")
 
     async def _run_export(self, job_id: str, requested: list[tuple[dict[str, Any], str | None]]):
         job = self.jobs[job_id]
@@ -187,7 +196,7 @@ class Plugin:
                     item["state"] = "cancelled"
             raise
         except Exception as error:
-            decky.logger.exception("DeckClip export failed")
+            decky.logger.exception("ClipPort export failed")
             job["state"] = "failed"
             job["error"] = str(error) or type(error).__name__
             job["details"] = traceback.format_exc()

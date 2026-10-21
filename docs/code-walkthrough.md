@@ -1,4 +1,4 @@
-# Reading DeckClip
+# Reading ClipPort
 
 Updated for 0.13.0: read `release-checklist.md` alongside this guide. The historical security review now has a follow-up section distinguishing resolved findings from remaining limitations.
 

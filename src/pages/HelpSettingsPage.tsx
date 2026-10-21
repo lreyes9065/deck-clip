@@ -11,11 +11,11 @@ function IPhoneHelp() {
       <PanelSectionRow>
         <Field
           label="One-time Shortcut setup"
-          description="Set this up before starting a QR transfer. Keep the exact name DeckClip Save to Photos for compatibility with existing Shortcuts; the plugin is now called ClipPort."
+          description="Set this up before starting a QR transfer. Name the shortcut exactly ClipPort Save to Photos. If you already have the old shortcut, just rename it—its actions do not need changing."
         />
       </PanelSectionRow>
       <PanelSectionRow><Field focusable label="Create the Shortcut" description={<>
-        <p style={stepStyle}><strong>1.</strong> Open Shortcuts, tap +, and name it <strong>DeckClip Save to Photos</strong>.</p>
+        <p style={stepStyle}><strong>1.</strong> Open Shortcuts, tap +, and name it <strong>ClipPort Save to Photos</strong>.</p>
         <p style={stepStyle}><strong>2.</strong> Add <strong>Get Contents of URL</strong>. Tap URL → Select Variable → <strong>Shortcut Input</strong>.</p>
         <p style={stepStyle}><strong>3.</strong> Add <strong>Get Dictionary Value</strong>. Enter <strong>files</strong>. It should say “Get Value for files in Contents of URL.”</p>
         <p style={stepStyle}><strong>4.</strong> Add <strong>Repeat with Each</strong> using <strong>Dictionary Value</strong>.</p>

@@ -1,4 +1,4 @@
-"""Naming and safe access for files in DeckClip's dedicated output directory."""
+"""Naming and safe access for files in ClipPort's dedicated output directory."""
 
 import datetime as dt
 import re
@@ -93,7 +93,7 @@ def export_path(output_dir: Path, filename: str) -> Path:
         if candidate.is_symlink() or not candidate.is_file():
             raise ValueError("Exported file no longer exists")
         if candidate.resolve().parent != output_dir.resolve():
-            raise ValueError("Exported file is outside the DeckClip folder")
+            raise ValueError("Exported file is outside the export folder")
     except OSError as error:
         raise ValueError("Could not inspect exported file") from error
     return candidate

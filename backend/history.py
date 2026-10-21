@@ -36,7 +36,7 @@ def load_history(directory: Path | None):
                 return {}
             job_id = entry.pop("id")
             if entry["state"] in ("queued", "running"):
-                entry.update(state="interrupted", error="DeckClip restarted before this export finished. Check your exports before retrying.")
+                entry.update(state="interrupted", error="ClipPort restarted before this export finished. Check your exports before retrying.")
                 for clip in entry["clips"]:
                     if clip["state"] in ("queued", "exporting"):
                         clip["state"] = "interrupted"

@@ -1,4 +1,4 @@
-"""Small, bounded in-memory previews; no source or cache files are written."""
+"""Bounded cached previews; source input may use an auto-removed temporary file."""
 import asyncio
 import base64
 import os
@@ -7,6 +7,7 @@ from collections import OrderedDict
 from backend.process_env import system_tool_env
 from backend.exports import open_export, file_identity
 from backend.processes import stop_process
+from backend.source_preview import open_source_preview
 
 
 class Thumbnails:
@@ -17,13 +18,13 @@ class Thumbnails:
         self.tasks = set()
         self.closing = False
 
-    async def get(self, filename):
+    async def get(self, filename, source_path=None):
         if self.closing or len(self.tasks) >= 8:
             return None
         task = asyncio.current_task()
         self.tasks.add(task)
         try:
-            return await self._get(filename)
+            return await self._get(filename, source_path)
         finally:
             self.tasks.discard(task)
 
@@ -34,11 +35,29 @@ class Thumbnails:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _get(self, filename):
+    async def _get(self, filename, source_path=None):
         async with self.lock:
-            path = self.resolve(filename)
-            stream = open_export(path)
-            key = (filename, *file_identity(os.fstat(stream.fileno())))
+            if source_path is not None:
+                key = ("source", filename, *file_identity(source_path.stat()))
+                if key in self.cache:
+                    self.cache.move_to_end(key)
+                    return self.cache[key]
+                # Keep ownership until the worker exits, including cancellation.
+                worker = asyncio.create_task(asyncio.to_thread(open_source_preview, source_path))
+                try:
+                    stream = await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    try:
+                        (await worker).close()
+                    except (OSError, ValueError):
+                        pass
+                    raise
+                except (OSError, ValueError):
+                    return None
+            else:
+                path = self.resolve(filename)
+                stream = open_export(path)
+                key = ("export", filename, *file_identity(os.fstat(stream.fileno())))
             if key in self.cache:
                 stream.close()
                 self.cache.move_to_end(key)

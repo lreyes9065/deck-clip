@@ -2,9 +2,7 @@
 
 Your Steam clips, ready to go. Export full-length clips and scan a QR code to download them to your phone over local Wi-Fi.
 
-Formerly DeckClip. The plugin is now Decky ClipPort (ClipPort in the panel). Starting with 0.15.1, rename your existing iPhone Shortcut to **ClipPort Save to Photos**; its actions are unchanged. For storage compatibility, exports remain in `/home/deck/Videos/DeckClip/` and the installed ZIP folder remains `DeckClip/`. Internal routes, saved game filters, and legacy-history lookup retain their existing keys. No videos are moved or deleted. Historical review documents and old release archives retain their original names.
-
-The export-manager page now survives panel remounts during deletion confirmation and refreshes after deletion, including when the final export is removed. Return to the library using Back to games.
+Formerly DeckClip; see `CHANGELOG.md` for the rename and other release notes. For storage compatibility, exports remain in `/home/deck/Videos/DeckClip/` and the installed ZIP folder remains `DeckClip/`.
 
 ClipPort is a barebones Decky Loader plugin with a searchable game and clip browser that exports any selection of Steam Game Recording clips to normal MP4 files in:
 
@@ -24,7 +22,9 @@ The phone page includes an optional **Save all to Photos** action for an explici
 
 - `src/index.tsx` is the small Decky entry point and screen coordinator. `src/pages/` contains the library, clip browser, and export manager screens; `src/components/` contains reusable UI; `src/hooks/` owns export and transfer polling; and typed backend calls, models, persistence, and formatting live under `src/api/`, `src/types/`, and `src/utils/`.
 - `main.py` is Decky's entry point and coordinates export jobs. Services under `backend/` handle library discovery, safe export-file access/publication, fragment assembly, QR/LAN transfers, thumbnails, subprocess lifetimes, and persistent status history. `process_env.py` isolates system FFmpeg from Decky's bundled library environment.
-- ClipPort explicitly assembles every numbered Steam `.m4s` fragment for each video/audio stream, then FFmpeg remuxes those streams without re-encoding. This avoids FFmpeg stopping after the first three-second DASH fragment. If a clip spans multiple recording sessions, ClipPort concatenates the resulting session parts into one MP4.
+- ClipPort feeds every numbered Steam `.m4s` fragment of each video/audio stream, in order, through a pipe straight into FFmpeg, which remuxes them without re-encoding. This avoids FFmpeg stopping after the first three-second DASH fragment, and no joined copies of the streams are written to disk. If a clip spans multiple recording sessions, ClipPort remuxes each session to a temporary part and concatenates the parts into one MP4, deleting the parts straight afterwards.
+- Before exporting, ClipPort checks each session is complete: segment numbers must be contiguous, audio and video segment counts must agree (within one segment, since audio frames do not line up exactly with segment boundaries), and the counts must match the session manifest where it lists them. Clips Steam wrote to in the last ten seconds are shown as still saving and cannot be selected until the next rescan.
+- Free space needed during export is about 1x the clip size for a single-session clip and about 2x for a multi-session clip (the parts plus the combined file).
 - All intermediate and final video writes stay under `/home/deck/Videos/DeckClip/`. Completed output is published atomically without replacing existing names. The latest five export statuses are stored separately in Decky's plugin log directory as a private `recent-exports.json` file. Source clip paths are never opened for writing, renamed, or removed.
 - Phone transfer serves at most 20 direct exports. Opened file identities must match the selected files; replacements are rejected. A random session URL protects the manifest and numbered file links. The server has an eight-client limit, write timeouts, and closes accepted connections when stopped or expired. It binds all IPv4 interfaces: reachability depends on routing, VPNs, and firewalls, not just Wi-Fi membership.
 
@@ -33,12 +33,12 @@ The phone page includes an optional **Save all to Photos** action for an explici
 ### Prerequisites
 
 1. Install Decky Loader and enable Developer Mode in Decky's settings.
-2. Confirm FFmpeg is available in Desktop Mode by running `ffmpeg -version` in Konsole. SteamOS normally provides it; if the command is missing, install or bundle a Deck-compatible FFmpeg before testing exports.
+2. Make sure ClipPort can find FFmpeg. See [FFmpeg](#ffmpeg) below.
 3. Make at least one clip using Steam Game Recording.
 
 ### Build on another computer (recommended)
 
-The current Decky template requires Node.js 16.14 or newer and pnpm 9.
+Building requires Node.js 18 or newer and pnpm 9.
 
 ```bash
 pnpm install
@@ -65,23 +65,30 @@ DeckClip/
 ├── backend/
 │   ├── __init__.py
 │   ├── exports.py
+│   ├── history.py
 │   ├── library.py
 │   ├── media.py
-│   ├── history.py
-│   ├── processes.py
 │   ├── process_env.py
-│   ├── thumbnails.py
+│   ├── processes.py
 │   ├── qr.py
+│   ├── source_preview.py
+│   ├── thumbnails.py
 │   └── transfer.py
 ├── dist/index.js
-├── docs/iphone-shortcut.md
+├── docs/
+│   ├── code-walkthrough.md
+│   ├── iphone-shortcut.md
+│   ├── release-checklist.md
+│   └── security-review-2026-09-12.md
+├── LICENSE
 ├── main.py
 ├── package.json
 ├── plugin.json
 ├── README.md
-├── LICENSE
 └── THIRD_PARTY_NOTICES.md
 ```
+
+`scripts/package-decky.sh` copies exactly these files and `scripts/verify-decky-zip.py` rejects an archive with anything missing or extra.
 
 ### Install through Decky
 
@@ -93,15 +100,14 @@ DeckClip/
 
 Decky owns its installed plugin directory and makes it read-only; that is expected. Install updates by generating and selecting a newer ZIP rather than editing `/home/deck/homebrew/plugins/DeckClip/` directly.
 
-#### Upgrading from v0.3.1 or earlier
+### FFmpeg
 
-Earlier prototypes ran their backend as root and may have created a root-owned output folder. Before using v0.4.0, switch to Desktop Mode and run this one-time ownership repair in Konsole:
+ClipPort runs FFmpeg for exports and previews. It looks in this order:
 
-```bash
-sudo chown -R deck:deck /home/deck/Videos/DeckClip
-```
+1. `~/.local/bin/ffmpeg` (that is, `/home/deck/.local/bin/ffmpeg`), if it exists and is executable.
+2. `ffmpeg` on the system `PATH`.
 
-The command is intentionally limited to ClipPort's output folder. New exports are created as the normal `deck` user.
+SteamOS does not guarantee an `ffmpeg` command, and its system partition is read-only, so check in Desktop Mode with `ffmpeg -version` in Konsole. If it is missing, put a static Linux x86_64 FFmpeg build at `~/.local/bin/ffmpeg` (for example from a static-build provider such as johnvansickle.com/ffmpeg or BtbN/FFmpeg-Builds), then run `chmod +x ~/.local/bin/ffmpeg` and check `~/.local/bin/ffmpeg -version`. That folder is in your home directory, so it survives SteamOS updates. ClipPort does not download or bundle FFmpeg itself.
 
 ### Test checklist
 
@@ -127,17 +133,15 @@ For safe fixture testing, set `DECKCLIP_STEAM_ROOT` to a fake Steam directory be
 
 ## Known prototype limitations
 
-- FFmpeg must be present on the Deck; a store-ready package should bundle a known-compatible binary.
-- Game titles are resolved from `appmanifest_*.acf` across configured libraries, Steam's local v41 `appinfo.vdf` cache, and `shortcuts.vdf` for current non-Steam shortcuts. Deleted shortcuts without remaining local metadata appear under Unknown / Unmatched as `Steam app <id>`.
+- FFmpeg must be present on the Deck (see [FFmpeg](#ffmpeg)); ClipPort does not bundle it. A store release could bundle a pinned static build through Decky's `remote_binary` packaging instead.
+- Game titles are resolved from `appmanifest_*.acf` across configured libraries, Steam's local `appinfo.vdf` cache (format version 29, magic `0x07564429`), and `shortcuts.vdf` for current non-Steam shortcuts. Deleted shortcuts without remaining local metadata appear under Unknown / Unmatched as `Steam app <id>`.
 - Session-copy and concat assume Steam kept compatible codecs/settings across a multi-session clip. A resolution or codec change may require a future fallback re-encode.
-- Exports cannot resume across a restart. The latest five status records survive; unfinished records are marked interrupted. Persistence failure (for example, a full disk) is logged and does not invalidate an otherwise successful export.
+- A running export keeps going while the Quick Access menu is closed, and the panel picks its progress back up when reopened. Exports cannot resume across a plugin or Deck restart. The latest five status records survive; unfinished records are marked interrupted. Persistence failure (for example, a full disk) is logged and does not invalidate an otherwise successful export.
 - Deletion is permanent and limited to selected exports. Stop sharing and wait for exports to finish before deleting. Originals might have been deleted separately, so check before confirming.
 - Phone transfer uses ordinary HTTP on the local network because the Deck cannot issue a browser-trusted certificate for its LAN address. Use it only on a trusted home network; the random link is temporary but network traffic is not encrypted.
 - The phone and Deck must be able to reach each other directly. Guest Wi-Fi, client isolation, a VPN, or a firewall can prevent the QR link from opening.
 
-## Release hardening and diagnostics
-
-Version 0.13.0 adds staged/no-overwrite publication, serialized export requests, coordinated delete/share starts, owned FFmpeg cancellation, bounded concurrent stderr reading, bounded previews, and transfer connection cleanup. Existing stream-copy behavior is unchanged; no video resizing or re-encoding was added.
+## Diagnostics
 
 Settings → Recent statuses shows the last five export batches across restarts. Error text is not visually ellipsized; very large FFmpeg output retains its final 128 KiB with an explicit notice. Records may contain local paths and game names. No transfer tokens or environment dumps are added to this history. Review screenshots before sharing them.
 

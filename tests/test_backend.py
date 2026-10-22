@@ -378,7 +378,7 @@ assert module.Plugin
         string_offset = 16 + len(entry) + 4
         table = struct.pack("<I", len(strings)) + b"".join(value + b"\0" for value in strings)
         data = (
-            library_backend.APPINFO_V41_MAGIC + struct.pack("<IQ", 1, string_offset) +
+            library_backend.APPINFO_V29_MAGIC + struct.pack("<IQ", 1, string_offset) +
             entry + struct.pack("<I", 0) + table
         )
         self.assertEqual(

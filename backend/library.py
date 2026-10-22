@@ -6,13 +6,39 @@ import mmap
 import os
 import re
 import struct
+import time
 from pathlib import Path
 from typing import Any
 
 import decky
 
 CLIP_RE = re.compile(r"^clip_(?P<app>\d+|downloaded)_(?P<date>\d{8})_(?P<time>\d{6})")
-APPINFO_V41_MAGIC = b"\x29\x44\x56\x07"
+# appinfo.vdf magic 0x07564429 (little-endian): format version 29, the
+# layout with a trailing string table. 0x29 is 41 in decimal, which is where
+# the old "V41" name came from; Steam's format number is 29.
+APPINFO_V29_MAGIC = b"\x29\x44\x56\x07"
+SESSION_TIME_RE = re.compile(r"(\d{8})_(\d{6})")
+# A clip folder written to within this many seconds may still be saving.
+RECENT_WRITE_SECONDS = 10.0
+
+
+def sorted_sessions(clip_dir: Path) -> list[Path]:
+    """Session manifests in recording order.
+
+    Steam names session folders with a ``YYYYMMDD_HHMMSS`` timestamp, so that
+    orders them. Folders without one fall back to manifest mtime; a manifest
+    that disappears mid-scan sorts last instead of raising.
+    """
+    def key(manifest: Path):
+        match = SESSION_TIME_RE.search(manifest.parent.name)
+        if match:
+            return (0, match.group(1) + match.group(2), 0.0, manifest.as_posix())
+        try:
+            modified = manifest.stat().st_mtime
+        except OSError:
+            modified = float("inf")
+        return (1, "", modified, manifest.as_posix())
+    return sorted(clip_dir.glob("video/**/session.mpd"), key=key)
 
 def _steam_roots() -> list[Path]:
     override = os.environ.get("DECKCLIP_STEAM_ROOT")
@@ -140,7 +166,7 @@ def _read_appinfo_bvdf(data, position: int, end: int, strings: list[str], depth:
 
 
 def _appinfo_names_from_data(data, wanted_ids: set[int]) -> dict[str, str]:
-    if len(data) < 20 or bytes(data[:4]) != APPINFO_V41_MAGIC:
+    if len(data) < 20 or bytes(data[:4]) != APPINFO_V29_MAGIC:
         return {}
     string_offset = struct.unpack_from("<Q", data, 8)[0]
     strings = _read_appinfo_string_table(data, string_offset)
@@ -308,14 +334,21 @@ def _discover(limit: int | None = None) -> list[dict[str, Any]]:
     }
     app_names = _app_names(roots, wanted_ids)
     results = []
+    now = time.time()
     for modified, clip_dir in sorted(found, reverse=True):
-        sessions = sorted(clip_dir.glob("video/**/session.mpd"), key=lambda p: p.stat().st_mtime)
-        if not sessions:
+        # Steam can delete or still be writing a clip while we scan. One bad
+        # clip is skipped rather than breaking the whole library listing.
+        try:
+            sessions = sorted_sessions(clip_dir)
+            if not sessions:
+                continue
+            newest_write = max([modified, *(path.stat().st_mtime for session in sessions for path in (session, session.parent))])
+            match = CLIP_RE.match(clip_dir.name)
+            app_id = match.group("app") if match else "unknown"
+            recorded = _parse_timestamp(clip_dir.name, modified)
+            durations = [_duration_from_mpd(session) for session in sessions]
+        except (OSError, ValueError):
             continue
-        match = CLIP_RE.match(clip_dir.name)
-        app_id = match.group("app") if match else "unknown"
-        recorded = _parse_timestamp(clip_dir.name, modified)
-        durations = [_duration_from_mpd(session) for session in sessions]
         total = sum(value for value in durations if value is not None) if any(value is not None for value in durations) else None
         results.append({
             "id": str(clip_dir),
@@ -324,6 +357,7 @@ def _discover(limit: int | None = None) -> list[dict[str, Any]]:
             "recorded_at": recorded.isoformat(),
             "duration_seconds": total,
             "session_count": len(sessions),
+            "saving": now - newest_write < RECENT_WRITE_SECONDS,
         })
         if limit is not None and len(results) == limit:
             break

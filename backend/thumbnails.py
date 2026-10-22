@@ -4,10 +4,15 @@ import base64
 import os
 import sys
 from collections import OrderedDict
-from backend.process_env import system_tool_env
+from backend.process_env import find_ffmpeg, system_tool_env
 from backend.exports import open_export, file_identity
 from backend.processes import stop_process
 from backend.source_preview import open_source_preview
+
+MAX_IN_FLIGHT = 8
+# Returned by Thumbnails.get when MAX_IN_FLIGHT requests are already waiting.
+# The panel retries these with backoff instead of keeping a blank preview.
+THUMBNAIL_BUSY = object()
 
 
 class Thumbnails:
@@ -19,8 +24,10 @@ class Thumbnails:
         self.closing = False
 
     async def get(self, filename, source_path=None):
-        if self.closing or len(self.tasks) >= 8:
+        if self.closing:
             return None
+        if len(self.tasks) >= MAX_IN_FLIGHT:
+            return THUMBNAIL_BUSY
         task = asyncio.current_task()
         self.tasks.add(task)
         try:
@@ -66,7 +73,7 @@ class Thumbnails:
             try:
                 descriptor_path = f"/proc/self/fd/{stream.fileno()}" if sys.platform.startswith("linux") else f"/dev/fd/{stream.fileno()}"
                 process = await asyncio.create_subprocess_exec(
-                    "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+                    find_ffmpeg() or "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
                     "-protocol_whitelist", "file,pipe", "-i", descriptor_path,
                     "-frames:v", "1", "-vf", "scale=160:90:force_original_aspect_ratio=decrease",
                     "-an", "-threads", "1", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",

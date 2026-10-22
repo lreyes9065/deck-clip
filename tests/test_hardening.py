@@ -68,6 +68,9 @@ class HardeningTests(unittest.IsolatedAsyncioTestCase):
             session = clip_dir / "video" / str(number) / "session.mpd"
             session.parent.mkdir(parents=True)
             session.write_text("fixture")
+            # Export now refuses sessions without fragments before remuxing.
+            (session.parent / "init-stream0.m4s").write_bytes(b"init")
+            (session.parent / "chunk-stream0-00001.m4s").write_bytes(b"chunk")
         async def remux(manifest, output, progress, stage): output.write_bytes(b"part")
         async def concat(command):
             Path(command[-1]).write_bytes(b"partial")

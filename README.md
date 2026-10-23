@@ -68,6 +68,7 @@ DeckClip/
 │   ├── history.py
 │   ├── library.py
 │   ├── media.py
+│   ├── paths.py
 │   ├── process_env.py
 │   ├── processes.py
 │   ├── qr.py

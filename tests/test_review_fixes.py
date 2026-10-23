@@ -137,8 +137,9 @@ class CompletenessTests(unittest.TestCase):
             validate_recording(Path(temp))  # off by one: normal audio frame alignment
             for chunk in Path(temp).glob("chunk-stream1-00002.m4s"):
                 chunk.unlink()
-            with self.assertRaisesRegex(IncompleteRecording, "stream 1 has 1 segments but video has 3"):
-                validate_recording(Path(temp))
+            warnings = []
+            validate_recording(Path(temp), warn=warnings.append)  # 0.15.0 exported these; warn only
+            self.assertEqual(warnings, ["stream 1 has 1 segments but video has 3"])
 
     def test_compares_against_manifest(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -147,12 +148,15 @@ class CompletenessTests(unittest.TestCase):
             manifest = folder / "session.mpd"
             manifest.write_text(MPD.format(start=1, repeat=2))
             validate_recording(folder, manifest)
+            # Real Steam manifests can disagree with their chunks; these warn, not block.
             manifest.write_text(MPD.format(start=1, repeat=3))
-            with self.assertRaisesRegex(IncompleteRecording, "manifest lists 4"):
-                validate_recording(folder, manifest)
+            warnings = []
+            validate_recording(folder, manifest, warnings.append)
+            self.assertTrue(any("manifest lists 4" in warning for warning in warnings), warnings)
             manifest.write_text(MPD.format(start=2, repeat=2))
-            with self.assertRaisesRegex(IncompleteRecording, "manifest says 2"):
-                validate_recording(folder, manifest)
+            warnings = []
+            validate_recording(folder, manifest, warnings.append)
+            self.assertTrue(any("manifest says 2" in warning for warning in warnings), warnings)
             manifest.write_text("not xml")
             validate_recording(folder, manifest)
 
@@ -277,19 +281,22 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
 
 class EnvironmentTests(unittest.TestCase):
     def test_output_dir_follows_decky_user_home(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
         loader = """
 import importlib.util, sys, types
-sys.modules['decky'] = types.SimpleNamespace(DECKY_USER_HOME='/tmp/clipport-home',
+sys.modules['decky'] = types.SimpleNamespace(DECKY_USER_HOME=sys.argv[2],
     logger=types.SimpleNamespace(info=lambda *a: None, exception=lambda *a: None))
 spec = importlib.util.spec_from_file_location('deckclip_home', sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 print(module.OUTPUT_DIR)
 """
-        result = subprocess.run([sys.executable, "-c", loader, str(Path(__file__).parents[1] / "main.py")],
-                                capture_output=True, text=True)
+        env = {key: value for key, value in os.environ.items() if key != "DECKY_USER_HOME"}
+        result = subprocess.run([sys.executable, "-c", loader, str(Path(__file__).parents[1] / "main.py"), home],
+                                capture_output=True, text=True, env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "/tmp/clipport-home/Videos/DeckClip")
+        self.assertEqual(result.stdout.strip(), f"{home}/Videos/DeckClip")
 
     def test_find_ffmpeg_prefers_user_local_bin_then_path(self):
         with tempfile.TemporaryDirectory() as home:

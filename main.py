@@ -26,13 +26,25 @@ from backend.exports import delete_exports, export_path, list_exports, publish_e
 from backend.history import load_history, save_history
 from backend.library import _discover, _duration_from_mpd, sorted_sessions
 from backend.media import IncompleteRecording, feed_fragments, stream_files as _stream_files, validate_recording
+from backend.paths import user_home
 from backend.process_env import find_ffmpeg
 from backend.processes import run_ffmpeg
 from backend.thumbnails import THUMBNAIL_BUSY, Thumbnails
 from backend.transfer import TransferManager
 
 
-OUTPUT_DIR = Path(getattr(decky, "DECKY_USER_HOME", "/home/deck")) / "Videos" / "DeckClip"
+OUTPUT_DIR = user_home() / "Videos" / "DeckClip"
+
+
+def _log(level: str, message: str, *args) -> None:
+    """Log through Decky's logger; logging must never break a request."""
+    method = getattr(getattr(decky, "logger", None), level, None)
+    if method is None:
+        return
+    try:
+        method(message, *args)
+    except Exception:
+        pass
 
 
 def _export_path(filename: str) -> Path:
@@ -71,7 +83,11 @@ class Plugin:
             await asyncio.gather(*self.tasks, return_exceptions=True)
 
     async def list_clips(self) -> list[dict[str, Any]]:
-        clips = await asyncio.to_thread(_discover)
+        try:
+            clips = await asyncio.to_thread(_discover)
+        except Exception:
+            _log("exception", "ClipPort could not list Steam clips")
+            raise
         self.preview_clips = {clip["id"] for clip in clips}
         return clips
 
@@ -238,8 +254,10 @@ class Plugin:
             raise RuntimeError(f"No session manifest found for {clip['game_name']}")
         item["stage"] = "Checking the recording is complete"
         for session in sessions:
+            def warn(message: str, session=session):
+                _log("warning", "ClipPort: %s: %s (exporting anyway)", session.parent, message)
             try:
-                validate_recording(session.parent, session)
+                validate_recording(session.parent, session, warn)
             except IncompleteRecording as error:
                 raise RuntimeError(
                     f"{clip['game_name']}: recording looks incomplete ({error}). "

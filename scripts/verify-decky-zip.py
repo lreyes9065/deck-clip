@@ -25,6 +25,7 @@ REQUIRED = {
     "DeckClip/backend/processes.py",
     "DeckClip/backend/history.py",
     "DeckClip/backend/source_preview.py",
+    "DeckClip/backend/paths.py",
     "DeckClip/dist/index.js",
     "DeckClip/docs/iphone-shortcut.md",
     "DeckClip/docs/release-checklist.md",

@@ -4,7 +4,6 @@ import re
 import asyncio
 import os
 import threading
-import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Callable
 
@@ -13,8 +12,17 @@ CHUNK_RE = re.compile(r"^chunk-stream(?P<id>\d+)-(?P<number>\d+)\.m4s$")
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 # Audio segments end on codec frame boundaries, so a complete recording can
 # have one more or one fewer audio segment than video (FFmpeg's DASH muxer does
-# this). A larger difference means a stream stopped early.
+# this). A larger difference is reported as a warning, not an error.
 MAX_SEGMENT_COUNT_DIFFERENCE = 1
+# Decky runs plugins on a PyInstaller-frozen Python that only ships the stdlib
+# modules Decky itself uses. xml.etree is NOT among them (checked against Decky
+# Loader v3.3.0), and importing it killed the whole backend at load. The MPD is
+# therefore read with this small tag scanner instead of an XML library.
+_XML_COMMENT_RE = re.compile(r"<!--.*?-->|<!\[CDATA\[.*?\]\]>", re.S)
+_XML_TAG_RE = re.compile(
+    r"<(?P<close>/)?(?:[A-Za-z_][\w.-]*:)?(?P<name>[A-Za-z_][\w.-]*)"
+    r"(?P<attrs>(?:\s+[^\s=/>]+\s*=\s*(?:\"[^\"]*\"|'[^']*'))*)\s*(?P<empty>/)?>")
+_XML_ATTR_RE = re.compile(r"(?:[A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
 
 
 class IncompleteRecording(ValueError):
@@ -88,8 +96,50 @@ def feed_fragments(files: list[Path], fd: int, on_bytes: Callable[[int], None], 
         return
 
 
-def _local(tag: str) -> str:
-    return tag.rsplit("}", 1)[-1]
+class _Element:
+    __slots__ = ("tag", "attrs", "children")
+
+    def __init__(self, tag: str, attrs: dict[str, str]):
+        self.tag = tag
+        self.attrs = attrs
+        self.children: list["_Element"] = []
+
+    def get(self, key: str, default: str = "") -> str:
+        return self.attrs.get(key, default)
+
+    def child(self, tag: str) -> "_Element | None":
+        return next((child for child in self.children if child.tag == tag), None)
+
+    def iter(self):
+        yield self
+        for child in self.children:
+            yield from child.iter()
+
+
+def _parse_xml(text: str) -> "_Element | None":
+    """Element tree of a small, well-formed XML document; None if it is not one.
+
+    Namespace prefixes are dropped. Text content, entities and processing
+    instructions are ignored; an MPD's segment layout is all in attributes.
+    """
+    text = _XML_COMMENT_RE.sub("", text)
+    root = _Element("#document", {})
+    stack = [root]
+    for match in _XML_TAG_RE.finditer(text):
+        name = match.group("name")
+        if match.group("close"):
+            if len(stack) < 2 or stack[-1].tag != name:
+                return None
+            stack.pop()
+            continue
+        attrs = {key: double or single for key, double, single in _XML_ATTR_RE.findall(match.group("attrs"))}
+        element = _Element(name, attrs)
+        stack[-1].children.append(element)
+        if not match.group("empty"):
+            stack.append(element)
+    if len(stack) != 1 or len(root.children) != 1:
+        return None
+    return root.children[0]
 
 
 def manifest_segments(manifest: Path) -> dict[int, dict]:
@@ -101,21 +151,23 @@ def manifest_segments(manifest: Path) -> dict[int, dict]:
     try:
         if manifest.stat().st_size > MAX_MANIFEST_BYTES:
             return {}
-        root = ElementTree.fromstring(manifest.read_bytes())
-    except (OSError, ElementTree.ParseError):
+        root = _parse_xml(manifest.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return {}
+    if root is None:
         return {}
     result: dict[int, dict] = {}
     for adaptation in root.iter():
-        if _local(adaptation.tag) != "AdaptationSet":
+        if adaptation.tag != "AdaptationSet":
             continue
-        shared = next((child for child in adaptation if _local(child.tag) == "SegmentTemplate"), None)
-        for representation in adaptation:
-            if _local(representation.tag) != "Representation":
+        shared = adaptation.child("SegmentTemplate")
+        for representation in adaptation.children:
+            if representation.tag != "Representation":
                 continue
             rep_id = representation.get("id", "")
             if not rep_id.isdigit():
                 continue
-            template = next((child for child in representation if _local(child.tag) == "SegmentTemplate"), shared)
+            template = representation.child("SegmentTemplate") or shared
             if template is None:
                 continue
             try:
@@ -123,11 +175,11 @@ def manifest_segments(manifest: Path) -> dict[int, dict]:
             except ValueError:
                 continue
             count = None
-            timeline = next((child for child in template if _local(child.tag) == "SegmentTimeline"), None)
+            timeline = template.child("SegmentTimeline")
             if timeline is not None:
                 count = 0
-                for segment in timeline:
-                    if _local(segment.tag) != "S":
+                for segment in timeline.children:
+                    if segment.tag != "S":
                         continue
                     try:
                         repeat = int(segment.get("r", "0"))
@@ -141,14 +193,24 @@ def manifest_segments(manifest: Path) -> dict[int, dict]:
     return result
 
 
-def validate_recording(session_dir: Path, manifest: Path | None = None) -> list[tuple[int, list[Path]]]:
-    """Return ``stream_files(session_dir)`` only if the session looks complete.
+def validate_recording(session_dir: Path, manifest: Path | None = None,
+                       warn: Callable[[str], None] | None = None) -> list[tuple[int, list[Path]]]:
+    """Return ``stream_files(session_dir)`` if the session can be exported.
 
-    Requires a video stream (id 0), contiguous chunk numbers per stream, the
-    same number of chunks in every stream (within MAX_SEGMENT_COUNT_DIFFERENCE),
-    and agreement with the manifest's
-    start number and segment count wherever the manifest states them.
+    Only real damage blocks an export, raising IncompleteRecording with the
+    reason: no video stream (id 0), or a gap in a stream's chunk numbers.
+
+    Disagreements that real Steam recordings are known to have are passed to
+    ``warn`` instead: chunks not starting at the manifest's startNumber (Steam
+    clips cut from a background recording keep the original numbering), a
+    manifest Representation with no fragments, a segment count that differs
+    from the manifest's timeline, and audio/video counts more than
+    MAX_SEGMENT_COUNT_DIFFERENCE apart. 0.15.0 exported all of these.
     """
+    def note(message: str):
+        if warn is not None:
+            warn(message)
+
     streams = stream_files(session_dir)
     if not streams or streams[0][0] != 0:
         raise IncompleteRecording("no video fragments")
@@ -169,15 +231,15 @@ def validate_recording(session_dir: Path, manifest: Path | None = None) -> list[
         info = expected.get(stream_id)
         if info is not None:
             if first != info["start"]:
-                raise IncompleteRecording(f"stream {stream_id} starts at segment {first}, manifest says {info['start']}")
+                note(f"stream {stream_id} starts at segment {first}, manifest says {info['start']}")
             if info["count"] is not None and len(numbers) != info["count"]:
-                raise IncompleteRecording(f"stream {stream_id} has {len(numbers)} segments, manifest lists {info['count']}")
+                note(f"stream {stream_id} has {len(numbers)} segments, manifest lists {info['count']}")
         counts[stream_id] = len(numbers)
     for stream_id in expected:
         if stream_id not in counts:
-            raise IncompleteRecording(f"manifest lists stream {stream_id} but it has no fragments")
+            note(f"manifest lists stream {stream_id} but it has no fragments")
     video = counts[0]
     for stream_id, count in counts.items():
         if abs(count - video) > MAX_SEGMENT_COUNT_DIFFERENCE:
-            raise IncompleteRecording(f"stream {stream_id} has {count} segments but video has {video}")
+            note(f"stream {stream_id} has {count} segments but video has {video}")
     return streams

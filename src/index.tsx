@@ -19,6 +19,9 @@ import { loadGameFilter, saveGameFilter } from "./utils/gameFilter";
 import { getNavigation, subscribeNavigation, showExports, invalidateExports } from "./utils/navigation";
 
 const HELP_ROUTE = "/deckclip/help";
+const LOOKING_FOR_CLIPS = "Looking for clips…";
+const BACKEND_SLOW_MS = 15000;
+const BACKEND_SLOW = "Still looking for clips. If this never finishes, ClipPort's backend may not have started: check the Decky log for Decky ClipPort.";
 
 function Content() {
   const quickAccessVisible = useQuickAccessVisible();
@@ -32,7 +35,7 @@ function Content() {
   const { managingExports, exportsRevision } = useSyncExternalStore(subscribeNavigation, getNavigation);
   const [exports, setExports] = useState<ExportedFile[]>([]);
   const [selectedExports, setSelectedExports] = useState<Record<string, boolean>>({});
-  const [message, setMessage] = useState("Looking for clips…");
+  const [message, setMessage] = useState(LOOKING_FOR_CLIPS);
   const reportError = useCallback((value: string) => setMessage(value), []);
   const finishExport = useCallback((job: Job) => {
     // Preserve failed/unprocessed clips and any selections outside this job.
@@ -55,10 +58,15 @@ function Content() {
   useEffect(() => {
     if (!quickAccessVisible) return;
     let active = true;
+    // A backend that failed to start never answers; say so instead of
+    // showing "Looking for clips…" forever.
+    const slow = window.setTimeout(() => {
+      if (active) setMessage((current) => current === LOOKING_FOR_CLIPS ? BACKEND_SLOW : current);
+    }, BACKEND_SLOW_MS);
     void refreshLibrary().catch((error) => {
       if (active) setMessage(`Could not load clips: ${String(error)}`);
-    });
-    return () => { active = false; };
+    }).finally(() => window.clearTimeout(slow));
+    return () => { active = false; window.clearTimeout(slow); };
   }, [quickAccessVisible]);
   const refreshExports = useCallback(async () => {
     try { setExports(await listExports()); setSelectedExports({}); setMessage(""); }

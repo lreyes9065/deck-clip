@@ -4,14 +4,19 @@ Release notes moved out of the README. Newest first.
 
 ## Unreleased
 
+- Fixed: 0.15.1 builds never loaded their backend on the Deck, so the panel sat on "Looking for clips…" with an empty game list. The manifest check imported `xml.etree`, which Decky's bundled Python does not ship, so `main.py` failed at import. Manifests are now read without it, and a test checks every backend import against the modules Decky ships.
+- Clip listing never hides a clip because of its contents. Only a folder with no `session.mpd` is left out, as in 0.15.0. Unreadable clips are logged and skipped without failing the list. The panel says when the backend has not answered after 15 seconds.
+- Exports are blocked only by real damage: no video stream, or a gap in a stream's segments. Manifest disagreements and uneven audio/video counts, which real Steam clips can have, are logged as warnings and the export goes ahead.
+- The Deck user's home is resolved in this order: `DECKY_USER_HOME`, Decky's helpers (`decky.DECKY_USER_HOME`, then the home of `DECKY_USER`), `$HOME` (never `/root`), and finally `/home/deck`.
+
 - Committed the missing `backend/source_preview.py` (and its tests); `main.py` failed to import without it.
 - Exports pipe fragments straight into FFmpeg instead of staging joined stream copies, cutting temporary disk use from up to about 3x the clip size to about 1x (2x for multi-session clips).
-- Exports refuse incomplete recordings (missing segments, mismatched audio/video counts, or disagreement with the manifest). Clips Steam is still writing are marked as saving.
+- Exports refuse incomplete recordings (missing segments or no video). Clips Steam is still writing are marked as saving.
 - Library scans skip clips that vanish mid-scan, and order sessions by their timestamped folder names.
 - Busy previews are retried by the panel with backoff instead of staying blank.
 - The panel resumes showing a running export's progress after the Quick Access menu is reopened.
 - Export filenames are capped at 200 UTF-8 bytes (previously 160 characters, which could exceed the 255-byte limit for CJK titles).
-- The output folder follows Decky's `DECKY_USER_HOME` instead of a hardcoded `/home/deck`.
+- The output folder follows the Deck user's home (see above) instead of a hardcoded `/home/deck`.
 - FFmpeg is found in `~/.local/bin/ffmpeg` or on `PATH`; the error message and README now say so accurately.
 - Removed the `debug` flag from `plugin.json`. Added GitHub Actions CI.
 

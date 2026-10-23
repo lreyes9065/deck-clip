@@ -12,6 +12,8 @@ from typing import Any
 
 import decky
 
+from .paths import user_home
+
 CLIP_RE = re.compile(r"^clip_(?P<app>\d+|downloaded)_(?P<date>\d{8})_(?P<time>\d{6})")
 # appinfo.vdf magic 0x07564429 (little-endian): format version 29, the
 # layout with a trailing string table. 0x29 is 41 in decimal, which is where
@@ -40,17 +42,37 @@ def sorted_sessions(clip_dir: Path) -> list[Path]:
         return (1, "", modified, manifest.as_posix())
     return sorted(clip_dir.glob("video/**/session.mpd"), key=key)
 
+def _log(level: str, message: str, *args) -> None:
+    """Log through Decky's logger; logging must never break the listing."""
+    method = getattr(getattr(decky, "logger", None), level, None)
+    if method is None:
+        return
+    try:
+        method(message, *args)
+    except Exception:
+        pass
+
+
 def _steam_roots() -> list[Path]:
     override = os.environ.get("DECKCLIP_STEAM_ROOT")
     if override:
         return [Path(override)]
-    home = Path(getattr(decky, "DECKY_USER_HOME", "/home/deck"))
+    home = user_home()
     candidates = [
         home / ".local/share/Steam",
         home / ".steam/steam",
         home / ".var/app/com.valvesoftware.Steam/.local/share/Steam",
     ]
-    return list(dict.fromkeys(path.resolve() for path in candidates if path.exists()))
+    roots = []
+    for path in candidates:
+        try:
+            if path.exists():
+                roots.append(path.resolve())
+        except OSError as error:
+            _log("warning", "ClipPort: skipping Steam folder %s: %s", path, error)
+    if not roots:
+        _log("warning", "ClipPort: no Steam folder found under %s", home)
+    return list(dict.fromkeys(roots))
 
 
 def _parse_timestamp(name: str, fallback: float) -> dt.datetime:
@@ -313,52 +335,97 @@ def _shortcut_names(path: Path) -> dict[str, str]:
     return names
 
 
-def _discover(limit: int | None = None) -> list[dict[str, Any]]:
-    roots = _steam_roots()
+def _find_clip_dirs(roots: list[Path]) -> list[tuple[float, Path]]:
     found: list[tuple[float, Path]] = []
     for root in roots:
         userdata = root / "userdata"
-        if not userdata.is_dir():
+        try:
+            if not userdata.is_dir():
+                continue
+            clips_dirs = list(userdata.glob("*/gamerecordings/clips"))
+        except OSError as error:
+            _log("warning", "ClipPort: cannot read %s: %s", userdata, error)
             continue
-        for clips_dir in userdata.glob("*/gamerecordings/clips"):
-            for clip_dir in clips_dir.glob("clip_*"):
-                if clip_dir.is_dir():
-                    try:
+        for clips_dir in clips_dirs:
+            try:
+                candidates = list(clips_dir.glob("clip_*"))
+            except OSError as error:
+                _log("warning", "ClipPort: cannot read %s: %s", clips_dir, error)
+                continue
+            for clip_dir in candidates:
+                try:
+                    if clip_dir.is_dir():
                         found.append((clip_dir.stat().st_mtime, clip_dir.resolve()))
-                    except OSError:
-                        continue
+                except OSError as error:
+                    _log("warning", "ClipPort: skipping %s: %s", clip_dir, error)
+    return found
+
+
+def _clip_entry(modified: float, clip_dir: Path, app_names: dict[str, str], now: float) -> dict[str, Any] | None:
+    """One listing entry, or None when the folder has no session manifest (as in 0.15.0).
+
+    Only a missing manifest hides a clip. Everything else here is best effort:
+    an unreadable timestamp or duration degrades that field, never the entry.
+    Completeness is checked at export time, where it can give a reason.
+    """
+    sessions = sorted_sessions(clip_dir)
+    if not sessions:
+        _log("info", "ClipPort: %s has no session.mpd yet; not listed", clip_dir)
+        return None
+    newest_write = modified
+    for session in sessions:
+        for path in (session, session.parent):
+            try:
+                newest_write = max(newest_write, path.stat().st_mtime)
+            except OSError:
+                continue
+    match = CLIP_RE.match(clip_dir.name)
+    app_id = match.group("app") if match else "unknown"
+    try:
+        recorded = _parse_timestamp(clip_dir.name, modified)
+    except (OSError, OverflowError, ValueError):
+        recorded = dt.datetime.now().astimezone()
+    durations = [_duration_from_mpd(session) for session in sessions]
+    total = sum(value for value in durations if value is not None) if any(value is not None for value in durations) else None
+    return {
+        "id": str(clip_dir),
+        "app_id": app_id,
+        "game_name": app_names.get(app_id, f"Steam app {app_id}" if app_id.isdigit() else "Steam clip"),
+        "recorded_at": recorded.isoformat(),
+        "duration_seconds": total,
+        "session_count": len(sessions),
+        "saving": now - newest_write < RECENT_WRITE_SECONDS,
+    }
+
+
+def _discover(limit: int | None = None) -> list[dict[str, Any]]:
+    roots = _steam_roots()
+    found = _find_clip_dirs(roots)
     wanted_ids = {
         match.group("app")
         for _, clip_dir in found
         if (match := CLIP_RE.match(clip_dir.name)) is not None
     }
-    app_names = _app_names(roots, wanted_ids)
+    try:
+        app_names = _app_names(roots, wanted_ids)
+    except Exception:
+        # Names are cosmetic; clips still list as "Steam app <id>".
+        _log("exception", "ClipPort: could not read game names")
+        app_names = {}
     results = []
     now = time.time()
-    for modified, clip_dir in sorted(found, reverse=True):
+    for modified, clip_dir in sorted(found, key=lambda entry: entry[0], reverse=True):
         # Steam can delete or still be writing a clip while we scan. One bad
-        # clip is skipped rather than breaking the whole library listing.
+        # clip is logged and skipped rather than breaking the whole listing.
         try:
-            sessions = sorted_sessions(clip_dir)
-            if not sessions:
-                continue
-            newest_write = max([modified, *(path.stat().st_mtime for session in sessions for path in (session, session.parent))])
-            match = CLIP_RE.match(clip_dir.name)
-            app_id = match.group("app") if match else "unknown"
-            recorded = _parse_timestamp(clip_dir.name, modified)
-            durations = [_duration_from_mpd(session) for session in sessions]
-        except (OSError, ValueError):
+            entry = _clip_entry(modified, clip_dir, app_names, now)
+        except Exception as error:
+            _log("warning", "ClipPort: skipping clip %s: %s", clip_dir, error)
             continue
-        total = sum(value for value in durations if value is not None) if any(value is not None for value in durations) else None
-        results.append({
-            "id": str(clip_dir),
-            "app_id": app_id,
-            "game_name": app_names.get(app_id, f"Steam app {app_id}" if app_id.isdigit() else "Steam clip"),
-            "recorded_at": recorded.isoformat(),
-            "duration_seconds": total,
-            "session_count": len(sessions),
-            "saving": now - newest_write < RECENT_WRITE_SECONDS,
-        })
+        if entry is None:
+            continue
+        results.append(entry)
         if limit is not None and len(results) == limit:
             break
+    _log("info", "ClipPort: listed %d clip(s) from %d clip folder(s)", len(results), len(found))
     return results

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 import shutil
-from pathlib import Path
+
+from .paths import user_home
 
 
 def find_ffmpeg() -> str | None:
@@ -15,8 +16,7 @@ def find_ffmpeg() -> str | None:
     preferred (Decky's process PATH does not usually include that folder),
     then whatever ``ffmpeg`` is on PATH. Always an absolute path when found.
     """
-    home = os.environ.get("DECKY_USER_HOME") or str(Path.home())
-    candidate = Path(home) / ".local" / "bin" / "ffmpeg"
+    candidate = user_home() / ".local" / "bin" / "ffmpeg"
     if candidate.is_file() and os.access(candidate, os.X_OK):
         return str(candidate)
     return shutil.which("ffmpeg")

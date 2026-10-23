@@ -34,12 +34,12 @@ export function ClipsPage(props: Props) {
             <Field
               icon={<ExportThumbnail filename={clip.id} modified={clip.recorded_at} source />}
               label={props.activeGroup === UNKNOWN_CLIPS ? clip.game_name : new Date(clip.recorded_at).toLocaleString()}
-              description={props.activeGroup === UNKNOWN_CLIPS
+              description={(props.activeGroup === UNKNOWN_CLIPS
                 ? `${new Date(clip.recorded_at).toLocaleString()} • ${formatDuration(clip.duration_seconds)}`
-                : formatDuration(clip.duration_seconds)}
+                : formatDuration(clip.duration_seconds)) + (clip.saving ? " • Steam is still saving (rescan shortly)" : "")}
               bottomSeparator="none"
             >
-              <Toggle value={Boolean(props.selected[clip.id])} onChange={(value) => props.onSelect(clip.id, value)} />
+              <Toggle value={Boolean(props.selected[clip.id])} disabled={clip.saving} onChange={(value) => props.onSelect(clip.id, value)} />
             </Field>
             {props.selected[clip.id] && (
               <TextField label="Optional filename" value={props.names[clip.id] ?? ""} onChange={(event) => props.onName(clip.id, event.target.value)} />

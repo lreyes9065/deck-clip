@@ -8,6 +8,17 @@ from pathlib import Path
 from typing import Any
 
 SAFE_NAME_RE = re.compile(r"[^\w .()\[\]-]+", re.UNICODE)
+# Linux filenames are limited to 255 *bytes*. 200 UTF-8 bytes for the stem
+# leaves room for publish_export's " (10000)" suffix plus ".mp4".
+MAX_NAME_BYTES = 200
+
+
+def _truncate_utf8(text: str, limit: int) -> str:
+    """Cut to at most ``limit`` UTF-8 bytes without splitting a character."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    return encoded[:limit].decode("utf-8", errors="ignore")
 
 
 def open_export(path: Path):
@@ -76,10 +87,11 @@ def delete_exports(output_dir: Path, filenames: list[str]) -> dict[str, Any]:
 
 def safe_output_name(requested: str | None, clip: dict[str, Any]) -> str:
     default = f"{clip['game_name']} - {dt.datetime.fromisoformat(clip['recorded_at']).strftime('%Y-%m-%d %H-%M-%S')}"
-    name = SAFE_NAME_RE.sub("_", (requested or default).strip()).strip(" ._")[:160] or "Steam clip"
+    name = SAFE_NAME_RE.sub("_", (requested or default).strip())
     if name.lower().endswith(".mp4"):
-        name = name[:-4].rstrip(" .")
-    return name + ".mp4"
+        name = name[:-4]
+    name = _truncate_utf8(name.strip(" ._"), MAX_NAME_BYTES).strip(" ._")
+    return (name or "Steam clip") + ".mp4"
 
 
 def export_path(output_dir: Path, filename: str) -> Path:

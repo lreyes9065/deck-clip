@@ -1,7 +1,7 @@
 """Owned subprocess lifetimes and bounded, concurrently drained diagnostics."""
 import asyncio
 
-from .process_env import system_tool_env
+from .process_env import find_ffmpeg, system_tool_env
 
 MAX_STDERR = 128 * 1024
 
@@ -22,11 +22,22 @@ async def stop_process(process):
             await process.wait()
 
 
-async def run_ffmpeg(command, on_progress=None):
+async def run_ffmpeg(command, on_progress=None, *, pass_fds=(), on_started=None):
+    """Run FFmpeg (argument list, never a shell) and raise on failure.
+
+    A leading ``"ffmpeg"`` is replaced by the resolved executable. ``pass_fds``
+    are inherited by the child; ``on_started`` runs right after the spawn so a
+    caller can close its copies of those descriptors and start feeding pipes.
+    """
+    command = list(command)
+    if command and command[0] == "ffmpeg":
+        command[0] = find_ffmpeg() or "ffmpeg"
     process = await asyncio.create_subprocess_exec(
         *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        env=system_tool_env(),
+        env=system_tool_env(), pass_fds=tuple(pass_fds),
     )
+    if on_started is not None:
+        on_started()
     tail = bytearray()
     truncated = False
 

@@ -1,6 +1,25 @@
-"""Environment for system tools launched from Decky's bundled Python runtime."""
+"""Environment and lookup for FFmpeg launched from Decky's bundled Python runtime."""
+
+from __future__ import annotations
 
 import os
+import shutil
+
+from .paths import user_home
+
+
+def find_ffmpeg() -> str | None:
+    """Return the FFmpeg executable ClipPort should run, or None.
+
+    SteamOS does not guarantee an ``ffmpeg`` command, and its system image is
+    read-only. A user-installed static build in ``~/.local/bin/ffmpeg`` is
+    preferred (Decky's process PATH does not usually include that folder),
+    then whatever ``ffmpeg`` is on PATH. Always an absolute path when found.
+    """
+    candidate = user_home() / ".local" / "bin" / "ffmpeg"
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return shutil.which("ffmpeg")
 
 
 def system_tool_env() -> dict[str, str]:

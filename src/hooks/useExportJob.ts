@@ -1,6 +1,6 @@
 import { toaster } from "@decky/api";
 import { useEffect, useRef, useState } from "react";
-import { getExportStatus, startExport } from "../api/deckclip";
+import { getActiveExport, getExportStatus, startExport } from "../api/deckclip";
 import type { ExportItem, Job } from "../types";
 
 export function useExportJob(onError: (message: string) => void, onFinished: (job: Job) => void) {
@@ -19,6 +19,18 @@ export function useExportJob(onError: (message: string) => void, onFinished: (jo
       setJobId(result.job_id);
     } finally { pending.current = false; setStarting(false); }
   };
+
+  // The panel unmounts whenever the Quick Access menu closes. On mount, pick up
+  // any export the backend is still running and resume polling it.
+  useEffect(() => {
+    let active = true;
+    void getActiveExport().then((found) => {
+      if (!active || !found) return;
+      setJob(found.job);
+      setJobId((current) => current ?? found.job_id);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (!jobId) return;

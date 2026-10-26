@@ -4,7 +4,7 @@ This is a pre-1.0 test build. Use expendable exported copies for destructive tes
 
 ## Automated checks
 
-Run `pnpm run release` and `git diff --check`. The backend suite covers remuxed multi-fragment duration, original-library environment restoration, no-overwrite publication, failed concat cleanup, file replacement rejection, malformed ranges, concurrent sharing/export starts, stalled-client shutdown, subprocess cancellation, bounded stderr, and private persistent history.
+Run `pnpm run release` and `git diff --check`. `pnpm run check:decky` lints `plugin.json` (no `debug` flag, no `root` flag) and checks every backend import, including ones inside functions, against the stdlib modules Decky's bundled Python ships (`tests/decky_bundled_modules-v3.2.10.txt` for Python 3.11 and `-v3.3.0.txt` for Python 3.14); with `--python python3.11 --python python3.14` it also imports `main.py` under each. CI runs both. The backend suite covers remuxed multi-fragment duration, original-library environment restoration, no-overwrite publication, failed concat cleanup, file replacement rejection, malformed ranges, concurrent sharing/export starts, stalled-client shutdown, subprocess cancellation, bounded stderr, and private persistent history.
 
 The ZIP verifier requires the runtime modules and rejects unexpected files, duplicate names, traversal, and symlink entries. These checks do not prove dependency provenance.
 
@@ -17,7 +17,7 @@ The ZIP verifier requires the runtime modules and rejects unexpected files, dupl
 5. Check lazy previews. Select exports, cancel deletion, then permanently delete only disposable test exports. Confirm Steam originals remain.
 6. Share a batch to iPhone. Test browser downloads and the Shortcut separately. A completed download is not a Photos acknowledgement.
 7. Start a download, stop sharing, and verify the connection closes. Test expiry and interrupted Wi-Fi. Retry with a fresh QR. Confirm controller Stop remains usable after a status error.
-8. Restart Decky after a finished export and inspect Recent statuses. Restart during a disposable export; verify the status records cancellation/interruption and no partial top-level MP4 is offered. An abrupt process kill can leave hidden staging directories; do not delete them blindly while another export is active.
+8. Restart Decky after a finished export and inspect Recent statuses. Restart during a disposable export (`sudo systemctl restart plugin_loader`) while a QR transfer is open; verify the restart is quick, `pgrep -a ffmpeg` shows nothing afterwards, the status records cancellation, no partial top-level MP4 is offered, and no `.deckclip-*` folder remains in `~/Videos/DeckClip/`. Plugin unload stops everything within about 2.5 seconds, before Decky's SIGKILL at 5 seconds; hidden staging folders left by an abrupt kill are removed the next time the plugin loads.
 9. Exercise low-space failure in an isolated test environment, not by filling a user's normal disk. Verify helpful errors, no overwritten videos, and no incomplete published MP4. Saving the status file itself may fail when the disk is full.
 
 ## Remaining gates / limitations
@@ -30,7 +30,7 @@ The ZIP verifier requires the runtime modules and rejects unexpected files, dupl
 - System FFmpeg is not bundled or independently audited. Libraries/parser vulnerabilities and codec changes remain external compatibility concerns.
 - Export count is limited to 100, one active batch; transfer selection remains 20. No silent reduction of existing transfer limits.
 - Downloadable/redacted diagnostic bundles and a multi-user beta remain future work; current history is readable in Settings and stored privately under Decky's plugin log directory.
-- The existing plugin debug flag is retained pending Decky release-policy review; no root flag is enabled.
+- `plugin.json` has no `debug` or `root` flag; `scripts/lint-plugin-json.py` (run in CI and by the ZIP verifier) keeps it that way.
 
 ## Understanding the new boundaries
 

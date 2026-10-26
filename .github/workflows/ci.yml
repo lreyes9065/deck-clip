@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  decky-runtime:
+    # Decky runs the backend on its own frozen Python with a trimmed stdlib
+    # (v3.2.10: Python 3.11, v3.3.0: Python 3.14). An import it does not ship
+    # stops the backend from loading and the panel hangs on "Looking for clips".
+    name: Decky runtime imports and plugin.json lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: |
+            3.11
+            3.14
+      - name: Lint plugin.json (no debug flag, no root flag)
+        run: python3 scripts/lint-plugin-json.py
+      - name: Import main.py and backend/ with only Decky's bundled modules
+        # Static AST scan of every import (including inside functions) against
+        # both module lists, plus a real import under the matching Python.
+        run: python3 scripts/check-decky-imports.py --python python3.11 --python python3.14 --require-runtime
+
+  backend:
+    name: Python backend tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 = Decky v3.0-v3.2.10, 3.14 = Decky v3.3.0; 3.10 = Decky v2.x.
+        python-version: ["3.10", "3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install FFmpeg (for media integration tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Run backend tests
+        run: python3 -m unittest discover -s tests -v
+
+  frontend:
+    name: Frontend typecheck, tests, build and package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - run: pnpm run test:frontend
+      - run: pnpm run build
+      - name: Package the Decky ZIP and verify its contents and plugin.json
+        run: pnpm run package:decky
+      - name: List the ZIP contents
+        run: unzip -l release/*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: decky-clipport-zip
+          path: release/*.zip
+          if-no-files-found: error

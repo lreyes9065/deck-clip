@@ -17,8 +17,11 @@ import type { Clip, ExportedFile, GameGroup, Job } from "./types";
 import { formatDuration } from "./utils/formatting";
 import { loadGameFilter, saveGameFilter } from "./utils/gameFilter";
 import { getNavigation, subscribeNavigation, showExports, invalidateExports } from "./utils/navigation";
+import { isTimeout } from "./utils/backendCall";
 
 const HELP_ROUTE = "/deckclip/help";
+const LOOKING_FOR_CLIPS = "Looking for clips…";
+const BACKEND_SLOW = "ClipPort's backend did not answer in 15 seconds. It may not have started: check the Decky log (~/homebrew/logs/DeckClip/). Close and reopen the menu to try again.";
 
 function Content() {
   const quickAccessVisible = useQuickAccessVisible();
@@ -32,7 +35,7 @@ function Content() {
   const { managingExports, exportsRevision } = useSyncExternalStore(subscribeNavigation, getNavigation);
   const [exports, setExports] = useState<ExportedFile[]>([]);
   const [selectedExports, setSelectedExports] = useState<Record<string, boolean>>({});
-  const [message, setMessage] = useState("Looking for clips…");
+  const [message, setMessage] = useState(LOOKING_FOR_CLIPS);
   const reportError = useCallback((value: string) => setMessage(value), []);
   const finishExport = useCallback((job: Job) => {
     // Preserve failed/unprocessed clips and any selections outside this job.
@@ -55,8 +58,12 @@ function Content() {
   useEffect(() => {
     if (!quickAccessVisible) return;
     let active = true;
+    // A backend that failed to start never answers. The list call times out
+    // after 15 s (and is cleared, so reopening asks again) instead of
+    // showing "Looking for clips…" forever.
+    setMessage((current) => current.startsWith("Could not load clips") || current === BACKEND_SLOW ? LOOKING_FOR_CLIPS : current);
     void refreshLibrary().catch((error) => {
-      if (active) setMessage(`Could not load clips: ${String(error)}`);
+      if (active) setMessage(isTimeout(error) ? BACKEND_SLOW : `Could not load clips: ${String(error)}`);
     });
     return () => { active = false; };
   }, [quickAccessVisible]);
@@ -172,7 +179,7 @@ function Content() {
         onShowMore={() => setVisibleCount((count) => count + PAGE_SIZE)}
       />
     )}
-    {exportJob.job && <ExportProgress job={exportJob.job} />}
+    {exportJob.job && <ExportProgress job={exportJob.job} warning={exportJob.warning} />}
   </>;
 }
 

@@ -5,7 +5,12 @@ export type Clip = {
   recorded_at: string;
   duration_seconds: number | null;
   session_count: number;
+  /** Steam wrote to this clip in the last few seconds; it may still be saving. */
+  saving?: boolean;
 };
+
+export type ThumbnailResult = { status: "busy" } | { status: "ready"; image: string | null };
+export type ActiveExport = { job_id: string; job: Job };
 
 export type ExportItem = { id: string; name?: string };
 export type JobClip = { id: string; display_name: string; progress: number; state: string; stage?: string; output?: string; error?: string };

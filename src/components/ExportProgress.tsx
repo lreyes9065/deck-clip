@@ -1,10 +1,11 @@
 import { Field, PanelSection, PanelSectionRow, ProgressBar } from "@decky/ui";
 import type { Job } from "../types";
 
-export function ExportProgress({ job }: { job: Job }) {
+export function ExportProgress({ job, warning }: { job: Job; warning?: string }) {
   return (
     <PanelSection title="Export progress">
       <PanelSectionRow><ProgressBar nProgress={job.progress} /></PanelSectionRow>
+      {warning && <PanelSectionRow><Field focusable label="Status delayed" description={warning} /></PanelSectionRow>}
       {job.clips.map((item) => (
         <PanelSectionRow key={item.id}>
           <Field label={item.display_name} description={item.error ?? `${Math.round(item.progress)}% • ${item.state}`}>

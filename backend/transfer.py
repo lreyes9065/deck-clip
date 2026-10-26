@@ -21,6 +21,8 @@ TRANSFER_COMPLETION_GRACE_SECONDS = 30
 MAX_TRANSFER_FILES = 20
 MAX_CLIENTS = 8
 WRITE_TIMEOUT = 15
+# Stopping the server never waits longer than this for listeners/clients.
+STOP_TIMEOUT = 1.0
 
 def _lan_address() -> str:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -44,6 +46,7 @@ class TransferManager:
         self.transfer_completion: asyncio.Task | None = None
         self.lock = asyncio.Lock()
         self.clients = {}
+        self.closing = False
 
     async def start_transfer(self, filenames: list[str] | str) -> dict[str, Any]:
         async with self.lock:
@@ -80,6 +83,10 @@ class TransferManager:
             server.close()
             await server.wait_closed()
             raise RuntimeError("Could not start the local transfer server")
+        if self.closing:
+            # The plugin started unloading while this listener was opening.
+            server.close()
+            raise RuntimeError("ClipPort is shutting down")
         port = int(sockets[0].getsockname()[1])
         url = f"http://{address}:{port}/{token}/"
         self.transfer = {
@@ -149,29 +156,42 @@ class TransferManager:
                 return
             await self._stop_locked()
 
-    async def _stop_locked(self):
+    async def shutdown(self):
+        """Stop sharing for plugin unload: no lock wait, bounded, aborts clients."""
+        self.closing = True
+        await self._stop_locked(abort=True)
+
+    async def _stop_locked(self, abort: bool = False):
         transfer = self.transfer
         self.transfer = None
         expiry = self.transfer_expiry
         self.transfer_expiry = None
         completion = self.transfer_completion
         self.transfer_completion = None
-        if expiry is not None and expiry is not asyncio.current_task():
-            expiry.cancel()
-            await asyncio.gather(expiry, return_exceptions=True)
-        if completion is not None and completion is not asyncio.current_task():
-            completion.cancel()
-            await asyncio.gather(completion, return_exceptions=True)
-        if transfer is not None:
-            server = transfer["server"]
-            server.close()
-            await server.wait_closed()
+        timers = [task for task in (expiry, completion) if task is not None and task is not asyncio.current_task()]
+        for task in timers:
+            task.cancel()
+        server = transfer["server"] if transfer is not None else None
+        if server is not None:
+            server.close()  # Stop accepting first.
+        # Close clients before waiting on the server: since Python 3.12,
+        # Server.wait_closed() also waits for every open connection.
         clients = list(self.clients.items())
         for task, writer in clients:
-            writer.close()
+            transport = getattr(writer, "transport", None)
+            if abort and transport is not None:
+                transport.abort()  # Drop unsent data instead of flushing to a stalled phone.
+            else:
+                writer.close()
             task.cancel()
-        if clients:
-            await asyncio.gather(*(task for task, _ in clients), return_exceptions=True)
+        pending = [*timers, *(task for task, _ in clients)]
+        if pending:
+            await asyncio.wait(pending, timeout=STOP_TIMEOUT)
+        if server is not None:
+            try:
+                await asyncio.wait_for(server.wait_closed(), STOP_TIMEOUT)
+            except asyncio.TimeoutError:
+                getattr(self._logger, "warning", lambda *args: None)("ClipPort transfer server did not close in time")
 
     async def _send_http(self, writer: asyncio.StreamWriter, status: str, headers: dict[str, str], body: bytes = b""):
         safe_headers = {
@@ -353,7 +373,7 @@ class TransferManager:
                 input_file.close()
             writer.close()
             try:
-                await asyncio.wait_for(writer.wait_closed(), 2)
+                await asyncio.wait_for(writer.wait_closed(), 0.5 if self.closing else 2)
             except (ConnectionError, asyncio.TimeoutError):
                 pass
             finally:

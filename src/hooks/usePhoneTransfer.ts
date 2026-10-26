@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { getTransferStatus, startTransfer, stopTransfer } from "../api/deckclip";
 import type { TransferStatus } from "../types";
+import { startPoller } from "../utils/backendCall";
+
+const POLL_MS = 1000;
+const MAX_POLL_FAILURES = 4;
 
 export function usePhoneTransfer(onError: (message: string) => void) {
   const [transfer, setTransfer] = useState<TransferStatus | null>(null);
@@ -28,28 +32,29 @@ export function usePhoneTransfer(onError: (message: string) => void) {
 
   useEffect(() => {
     if (!transfer || transfer.state === "inactive" || transfer.state === "expired") return;
-    let active = true;
-    let polling = false;
-    const timer = window.setInterval(async () => {
-      if (busy.current || polling || !active) return;
-      polling = true;
-      const request = revision.current;
-      try {
+    // One status call at a time; each times out, so polling never stalls.
+    const poller = startPoller({
+      intervalMs: POLL_MS,
+      poll: async () => {
+        // Starting or stopping is in progress; check again next tick.
+        if (busy.current) return "continue";
+        const request = revision.current;
         const status = await getTransferStatus();
-        if (!active || request !== revision.current) return;
+        if (poller.stopped || request !== revision.current) return "continue";
         if (status.state === "inactive" || status.state === "expired") {
           setTransfer(null);
-          window.clearInterval(timer);
-        } else {
-          setTransfer((current) => ({ ...current, ...status, qr: current?.qr }));
+          return "stop";
         }
-      } catch (error) {
-        if (!active || request !== revision.current) return;
-        onError(`Lost transfer status: ${String(error)}`);
-        window.clearInterval(timer);
-      } finally { polling = false; }
-    }, 1000);
-    return () => { active = false; window.clearInterval(timer); };
+        setTransfer((current) => ({ ...current, ...status, qr: current?.qr }));
+        return "continue";
+      },
+      onError: (error, failures) => {
+        if (failures < MAX_POLL_FAILURES) return "retry";
+        onError(`Lost transfer status: ${String(error)}. The QR link may still work; use Stop sharing to end it.`);
+        return "stop";
+      },
+    });
+    return () => poller.stop();
   }, [onError, transfer?.state, transfer?.url]);
 
   return { begin, stop, transfer };

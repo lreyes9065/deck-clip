@@ -6,11 +6,12 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "package:decky": "sh scripts/package-decky.sh",
-    "release": "pnpm run typecheck && pnpm run test:frontend && pnpm run test:backend && pnpm run build && pnpm run package:decky",
-    "test:frontend": "node --test tests/navigation.test.mjs tests/thumbnail-retry.test.mjs",
+    "release": "pnpm run typecheck && pnpm run test:frontend && pnpm run check:decky && pnpm run test:backend && pnpm run build && pnpm run package:decky",
+    "test:frontend": "node --test tests/navigation.test.mjs tests/thumbnail-retry.test.mjs tests/backend-call.test.mjs",
     "watch": "rollup -c -w",
     "typecheck": "tsc --noEmit",
-    "test:backend": "python3 -m unittest discover -s tests -v"
+    "test:backend": "python3 -m unittest discover -s tests -v",
+    "check:decky": "python3 scripts/lint-plugin-json.py && python3 scripts/check-decky-imports.py"
   },
   "license": "MIT",
   "engines": {

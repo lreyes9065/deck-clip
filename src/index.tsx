@@ -17,11 +17,11 @@ import type { Clip, ExportedFile, GameGroup, Job } from "./types";
 import { formatDuration } from "./utils/formatting";
 import { loadGameFilter, saveGameFilter } from "./utils/gameFilter";
 import { getNavigation, subscribeNavigation, showExports, invalidateExports } from "./utils/navigation";
+import { isTimeout } from "./utils/backendCall";
 
 const HELP_ROUTE = "/deckclip/help";
 const LOOKING_FOR_CLIPS = "Looking for clips…";
-const BACKEND_SLOW_MS = 15000;
-const BACKEND_SLOW = "Still looking for clips. If this never finishes, ClipPort's backend may not have started: check the Decky log for Decky ClipPort.";
+const BACKEND_SLOW = "ClipPort's backend did not answer in 15 seconds. It may not have started: check the Decky log (~/homebrew/logs/DeckClip/). Close and reopen the menu to try again.";
 
 function Content() {
   const quickAccessVisible = useQuickAccessVisible();
@@ -58,15 +58,14 @@ function Content() {
   useEffect(() => {
     if (!quickAccessVisible) return;
     let active = true;
-    // A backend that failed to start never answers; say so instead of
+    // A backend that failed to start never answers. The list call times out
+    // after 15 s (and is cleared, so reopening asks again) instead of
     // showing "Looking for clips…" forever.
-    const slow = window.setTimeout(() => {
-      if (active) setMessage((current) => current === LOOKING_FOR_CLIPS ? BACKEND_SLOW : current);
-    }, BACKEND_SLOW_MS);
+    setMessage((current) => current.startsWith("Could not load clips") || current === BACKEND_SLOW ? LOOKING_FOR_CLIPS : current);
     void refreshLibrary().catch((error) => {
-      if (active) setMessage(`Could not load clips: ${String(error)}`);
-    }).finally(() => window.clearTimeout(slow));
-    return () => { active = false; window.clearTimeout(slow); };
+      if (active) setMessage(isTimeout(error) ? BACKEND_SLOW : `Could not load clips: ${String(error)}`);
+    });
+    return () => { active = false; };
   }, [quickAccessVisible]);
   const refreshExports = useCallback(async () => {
     try { setExports(await listExports()); setSelectedExports({}); setMessage(""); }
@@ -180,7 +179,7 @@ function Content() {
         onShowMore={() => setVisibleCount((count) => count + PAGE_SIZE)}
       />
     )}
-    {exportJob.job && <ExportProgress job={exportJob.job} />}
+    {exportJob.job && <ExportProgress job={exportJob.job} warning={exportJob.warning} />}
   </>;
 }
 

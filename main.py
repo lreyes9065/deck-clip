@@ -28,12 +28,40 @@ from backend.library import _discover, _duration_from_mpd, sorted_sessions
 from backend.media import IncompleteRecording, feed_fragments, stream_files as _stream_files, validate_recording
 from backend.paths import user_home
 from backend.process_env import find_ffmpeg
+from backend import processes
 from backend.processes import run_ffmpeg
 from backend.thumbnails import THUMBNAIL_BUSY, Thumbnails
 from backend.transfer import TransferManager
 
 
 OUTPUT_DIR = user_home() / "Videos" / "DeckClip"
+# Decky sends SIGTERM, then SIGKILL 5 seconds later: _unload must finish well
+# inside that, including stopping FFmpeg and the transfer server.
+UNLOAD_BUDGET = 2.5
+STAGING_PREFIX = ".deckclip-"
+
+
+def _remove_staging(output_dir: Path) -> int:
+    """Delete leftover export staging folders (partial MP4s) in the output folder.
+
+    Only direct children named .deckclip-* that are real directories, never
+    symlinks, and never anything else in the folder.
+    """
+    removed = 0
+    try:
+        entries = list(os.scandir(output_dir))
+    except OSError:
+        return 0
+    for entry in entries:
+        if not entry.name.startswith(STAGING_PREFIX):
+            continue
+        try:
+            if entry.is_dir(follow_symlinks=False):
+                shutil.rmtree(entry.path)
+                removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def _log(level: str, message: str, *args) -> None:
@@ -70,17 +98,51 @@ class Plugin:
         self.transfers = TransferManager(_export_path, decky.logger)
         self.thumbnails = Thumbnails(_export_path)
         self.preview_clips = set()
+        # A previous run killed mid-export can leave partial output behind.
+        if await asyncio.to_thread(_remove_staging, OUTPUT_DIR):
+            _log("info", "ClipPort removed unfinished export files from a previous run")
         decky.logger.info("ClipPort loaded")
 
     async def _unload(self):
+        """Stop everything within UNLOAD_BUDGET seconds, before Decky's SIGKILL.
+
+        Never waits on operation_lock: a request holding it must not delay
+        stopping FFmpeg. Order: signal every child at once, cancel tasks and
+        stop sharing in parallel with a shared deadline, then SIGKILL whatever
+        is left and remove partial output.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + UNLOAD_BUDGET
         self.closing = True
-        async with self.operation_lock:
-            await self.transfers._stop_transfer()
-        await self.thumbnails.close()
-        for task in self.tasks:
+        processes.terminate_all()
+        tasks = list(getattr(self, "tasks", ()))
+        for task in tasks:
             task.cancel()
-        if self.tasks:
-            await asyncio.gather(*self.tasks, return_exceptions=True)
+        work = [*tasks]
+        if getattr(self, "thumbnails", None) is not None:
+            work.append(asyncio.ensure_future(self.thumbnails.close()))
+        if getattr(self, "transfers", None) is not None:
+            work.append(asyncio.ensure_future(self.transfers.shutdown()))
+        if work:
+            # Leave time after this for SIGKILL, reaping and cleanup.
+            done, pending = await asyncio.wait(work, timeout=max(0.1, deadline - loop.time() - 0.8))
+            for future in done:
+                if not future.cancelled() and future.exception() is not None:
+                    _log("warning", "ClipPort unload step failed: %s", future.exception())
+            if pending:
+                _log("warning", "ClipPort: %d unload step(s) still running at the deadline", len(pending))
+        processes.kill_all()
+        await processes.reap_all(max(0.0, deadline - loop.time() - 0.3))
+        for job in getattr(self, "jobs", {}).values():
+            if job.get("state") in ("queued", "running"):
+                job["state"] = "cancelled"
+                job["error"] = "Export cancelled while the plugin was unloading."
+        if getattr(self, "jobs", None):
+            self._save_history()
+        if any(not task.done() for task in tasks):
+            # A task is still finishing; let it remove its own staging folder.
+            return
+        _remove_staging(OUTPUT_DIR)
 
     async def list_clips(self) -> list[dict[str, Any]]:
         try:

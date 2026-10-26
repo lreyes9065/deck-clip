@@ -6,7 +6,7 @@ import sys
 from collections import OrderedDict
 from backend.process_env import find_ffmpeg, system_tool_env
 from backend.exports import open_export, file_identity
-from backend.processes import stop_process
+from backend.processes import spawn, stop_process
 from backend.source_preview import open_source_preview
 
 MAX_IN_FLIGHT = 8
@@ -72,7 +72,7 @@ class Thumbnails:
             process = None
             try:
                 descriptor_path = f"/proc/self/fd/{stream.fileno()}" if sys.platform.startswith("linux") else f"/dev/fd/{stream.fileno()}"
-                process = await asyncio.create_subprocess_exec(
+                process = await spawn(
                     find_ffmpeg() or "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
                     "-protocol_whitelist", "file,pipe", "-i", descriptor_path,
                     "-frames:v", "1", "-vf", "scale=160:90:force_original_aspect_ratio=decrease",

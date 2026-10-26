@@ -1,5 +1,4 @@
 """Regressions found on a real Steam Deck with 0.15.1 (backend never loaded)."""
-import ast
 import asyncio
 import os
 import subprocess
@@ -16,7 +15,6 @@ from backend.media import IncompleteRecording, manifest_segments, validate_recor
 from backend.paths import DEFAULT_HOME, user_home
 
 PROJECT = Path(__file__).parents[1]
-BUNDLED = PROJECT / "tests" / "decky_bundled_modules.txt"
 
 # Steam's own session.mpd layout (FFmpeg DASH muxer output): namespaced,
 # one AdaptationSet per stream, shared SegmentTemplate, SegmentTimeline.
@@ -107,28 +105,10 @@ def deck_like_decky(home: Path | None):
 
 
 class DeckyRuntimeImportTests(unittest.TestCase):
-    """Decky's frozen Python only ships some stdlib modules (root cause of the 0.15.1 hang)."""
+    """Decky's frozen Python only ships some stdlib modules (root cause of the 0.15.1 hang).
 
-    def test_backend_imports_only_modules_decky_ships(self):
-        allowed = {line.strip() for line in BUNDLED.read_text().splitlines()
-                   if line.strip() and not line.startswith("#")}
-        allowed |= set(sys.builtin_module_names) | {"decky", "pwd"}
-        problems = []
-        for path in [PROJECT / "main.py", *sorted((PROJECT / "backend").glob("*.py"))]:
-            for node in ast.walk(ast.parse(path.read_text(), str(path))):
-                if isinstance(node, ast.Import):
-                    names = [alias.name for alias in node.names]
-                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                    names = [node.module]
-                else:
-                    continue
-                for name in names:
-                    if name == "__future__" or name.split(".")[0] == "backend":
-                        continue
-                    if name not in allowed:
-                        problems.append(f"{path.name}:{node.lineno} imports {name}")
-        self.assertEqual(problems, [], "Decky's bundled Python does not ship these modules, so the "
-                         "backend would fail to load (see scripts/decky-bundled-modules.py)")
+    The import allowlist checks themselves live in test_decky_imports.py.
+    """
 
     def test_media_does_not_use_xml_etree(self):
         source = (PROJECT / "backend" / "media.py").read_text()

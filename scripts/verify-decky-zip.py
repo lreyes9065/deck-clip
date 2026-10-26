@@ -3,11 +3,17 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import stat
 import sys
 import zipfile
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+
+_spec = importlib.util.spec_from_file_location("lint_plugin_json", Path(__file__).with_name("lint-plugin-json.py"))
+lint_plugin_json = importlib.util.module_from_spec(_spec)
+assert _spec.loader
+_spec.loader.exec_module(lint_plugin_json)
 
 
 REQUIRED = {
@@ -62,6 +68,17 @@ def verify(path: str) -> None:
             raise SystemExit("plugin.json name must be Decky ClipPort")
         if not package.get("version"):
             raise SystemExit("package.json must contain a version")
+        problems = lint_plugin_json.lint(plugin, package)
+        if problems:
+            raise SystemExit("plugin.json in the ZIP fails lint: " + "; ".join(problems))
+        for name in sorted(files):
+            if name.endswith((".py", ".js", ".json")) and archive.getinfo(name).file_size == 0:
+                raise SystemExit(f"Empty runtime file in release ZIP: {name}")
+            if name.endswith(".py"):
+                try:
+                    compile(archive.read(name), name, "exec")
+                except SyntaxError as error:
+                    raise SystemExit(f"Python file in release ZIP does not compile: {name}: {error}")
 
     print(f"Verified Decky archive: {path}")
 
